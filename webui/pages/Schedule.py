@@ -112,11 +112,13 @@ with st.expander("➕ Schedule videos", expanded=False):
                 "Date", min_value=date.today(), value=date.today()
             )
             post_time_value = st.time_input(
-                "Planned post time (optional)",
+                "Post time (optional)",
                 value=None,
                 step=timedelta(minutes=15),
-                help="Informational: included in the Discord alert so you know "
-                "when you meant to publish.",
+                help="With a time set, the video is scheduled on YouTube and "
+                "goes public automatically at this time (timezone: "
+                "youtube.publish_timezone in config.toml). Without one it "
+                "stays a private draft for manual publishing.",
             )
         with col2:
             topic = st.text_area(

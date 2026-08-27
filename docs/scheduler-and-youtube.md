@@ -98,7 +98,16 @@ edit link**, plus a red alert if a scheduled generation fails.
 Open the WebUI — there is now a **Schedule** page in the sidebar:
 
 - **Add entries**: date, topic, number of videos, Shorts/Horizontal preset,
-  optional planned post time (shown in the alert as a reminder).
+  optional planned post time.
+- **Post time controls YouTube scheduling.** An entry WITH a post time is
+  uploaded private and scheduled via the API's `publishAt` — YouTube flips
+  it public automatically at that date+time, interpreted in
+  `youtube.publish_timezone` from config.toml (IANA name like
+  "Africa/Lagos"; empty = server local, which inside Docker is usually
+  UTC). An entry WITHOUT a post time stays a private draft for you to
+  publish manually. If generation finishes after the planned time has
+  already passed, the video falls back to a private draft instead of
+  going public instantly.
 - **Month view** shows what's planned where; the list below has
   delete/retry and per-entry **Duplicate** (pick target dates, optionally a
   new topic — your "same preset, different day" workflow).

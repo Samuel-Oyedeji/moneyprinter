@@ -79,15 +79,19 @@ if not videos:
 total_size_mb = sum(v["size_mb"] for v in videos)
 header_col, count_col = st.columns([3, 2], vertical_alignment="center")
 with header_col:
-    show_count = st.slider(
-        "Videos shown (newest first)",
-        min_value=3,
-        max_value=max(len(videos), 3),
-        value=min(6, len(videos)),
-        step=3,
-        help="Each shown video is streamed by the server; keep this low on "
-        "slow connections.",
-    )
+    # 视频少于滑块下限时 st.slider 会因 min==max 抛异常，直接全量展示。
+    if len(videos) > 3:
+        show_count = st.slider(
+            "Videos shown (newest first)",
+            min_value=3,
+            max_value=len(videos),
+            value=min(6, len(videos)),
+            step=1,
+            help="Each shown video is streamed by the server; keep this low "
+            "on slow connections.",
+        )
+    else:
+        show_count = len(videos)
 with count_col:
     st.metric("In library", f"{len(videos)} videos · {total_size_mb:,.0f} MB")
 

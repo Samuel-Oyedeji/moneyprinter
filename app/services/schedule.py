@@ -319,13 +319,69 @@ def _extract_thumbnail(video_path: str, output_path: str) -> Optional[str]:
         return None
 
 
+def _compute_publish_at(entry: dict) -> Optional[str]:
+    """Build the YouTube ``status.publishAt`` timestamp for an entry.
+
+    YouTube requires ISO 8601 and treats a past timestamp as "publish right
+    now", so entries whose planned time has already passed fall back to a
+    plain private draft instead of accidentally going public.
+
+    The entry's date + post_time are interpreted in ``youtube.publish_timezone``
+    (an IANA name like "Africa/Lagos"); when unset, the server's local
+    timezone is used - note that inside Docker that is usually UTC.
+    """
+    post_time = entry.get("post_time", "")
+    if not post_time:
+        return None
+
+    try:
+        naive = datetime.strptime(f"{entry['date']} {post_time}", "%Y-%m-%d %H:%M")
+    except ValueError:
+        logger.warning(
+            f"invalid date/post_time on entry {entry.get('id')}, "
+            "uploading as plain private draft"
+        )
+        return None
+
+    tz_name = config.youtube.get("publish_timezone", "")
+    if tz_name:
+        try:
+            from zoneinfo import ZoneInfo
+
+            local = naive.replace(tzinfo=ZoneInfo(tz_name))
+        except Exception as e:
+            logger.warning(
+                f"invalid youtube.publish_timezone {tz_name!r} ({e}), "
+                "falling back to server local time"
+            )
+            local = naive.astimezone()
+    else:
+        local = naive.astimezone()
+
+    publish_utc = local.astimezone(timezone.utc)
+    if publish_utc <= datetime.now(timezone.utc):
+        logger.warning(
+            f"planned publish time {publish_utc.isoformat()} is in the past "
+            f"for entry {entry.get('id')}, uploading as plain private draft"
+        )
+        return None
+
+    return publish_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _upload_entry_videos(entry: dict, video_paths: list[str], script: str) -> dict:
-    """Upload each generated video as a private draft and alert Discord."""
+    """Upload each generated video and alert Discord.
+
+    With a post_time set, the video is scheduled on YouTube (private +
+    publishAt, so YouTube flips it public automatically at that moment);
+    without one it stays a private draft for manual publishing.
+    """
     from app.services import discord_notify, llm, youtube_upload
 
     uploaded_ids = []
     errors = []
     language = entry.get("language", "") or config.ui.get("video_language", "")
+    publish_at = _compute_publish_at(entry)
 
     for index, video_path in enumerate(video_paths, start=1):
         metadata = llm.generate_social_metadata(
@@ -352,6 +408,7 @@ def _upload_entry_videos(entry: dict, video_paths: list[str], script: str) -> di
             description=description,
             tags=hashtags,
             thumbnail_path=thumbnail_path,
+            publish_at=publish_at,
         )
         if result.get("success"):
             video_id = result["video_id"]
@@ -362,6 +419,7 @@ def _upload_entry_videos(entry: dict, video_paths: list[str], script: str) -> di
                 scheduled_date=entry["date"],
                 topic=entry["topic"],
                 post_time=entry.get("post_time", ""),
+                publish_at=publish_at,
             )
         else:
             errors.append(result.get("error", "unknown upload error"))

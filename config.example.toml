@@ -384,6 +384,13 @@ client_secrets_file = ""   # default: storage/youtube/client_secret.json
 token_file = ""            # default: storage/youtube/token.json
 default_privacy_status = "private"
 category_id = "22"         # 22 = People & Blogs
+# Timezone that calendar post times are written in (IANA name, e.g.
+# "Africa/Lagos", "America/New_York"). A schedule entry WITH a post time is
+# uploaded private + scheduled: YouTube flips it public automatically at
+# date+time in this timezone. Entries WITHOUT a post time stay private
+# drafts for manual publishing. Empty = server local time (in Docker that
+# is usually UTC).
+publish_timezone = ""
 
 [discord]
 # Discord webhook for "video ready to publish" alerts.
