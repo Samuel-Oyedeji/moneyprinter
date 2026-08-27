@@ -1484,6 +1484,14 @@ def _render_top_bar():
             gap="small",
             width="stretch",
         ):
+            # styles.css 隐藏了 Streamlit 顶栏（含侧边栏展开按钮），
+            # 因此在操作区提供显式的日历页入口。
+            st.page_link(
+                "pages/Schedule.py",
+                label="Calendar",
+                icon=":material/calendar_month:",
+            )
+
             _render_task_manager_entry()
 
             if st.button(
