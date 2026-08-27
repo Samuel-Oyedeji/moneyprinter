@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "webui",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-m", "streamlit", "run", "webui/Main.py",
+        "--server.address=127.0.0.1",
+        "--server.port=8501",
+        "--browser.gatherUsageStats=False",
+        "--server.headless=True"
+      ],
+      "port": 8501
+    }
+  ]
+}
