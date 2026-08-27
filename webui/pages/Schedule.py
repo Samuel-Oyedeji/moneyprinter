@@ -56,6 +56,15 @@ st.markdown(
 .status-chip { display: inline-block; font-size: 0.72rem; font-weight: 600;
                border-radius: 999px; padding: 2px 10px; color: #fff;
                vertical-align: middle; }
+/* Streamlit 的 popover 面板默认裁剪溢出内容，导致里面的多选日期下拉被
+   挡住。允许面板溢出，并给它一个高于同级卡片的层级。 */
+div[data-testid="stPopoverBody"] { overflow: visible !important; }
+div[data-testid="stPopover"] { z-index: 1000; }
+/* 折叠后的每日概览用小圆点表示各视频状态。 */
+.day-dots { display: inline-flex; flex-wrap: wrap; gap: 5px;
+            align-items: center; vertical-align: middle; }
+.day-dot  { display: inline-block; font-size: 0.68rem; font-weight: 600;
+            border-radius: 999px; padding: 1px 9px; color: #fff; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -82,6 +91,24 @@ _PRESET_ICONS = {"shorts": "📱", "horizontal": "🖥️"}
 def _status_chip(status: str) -> str:
     label = _STATUS_LABELS.get(status, status)
     return f'<span class="status-chip pill-{html.escape(status)}">{label}</span>'
+
+
+def _day_summary_html(day_entries: list[dict]) -> str:
+    """One coloured dot per scheduled video, in entry order.
+
+    Gives the collapsed day row an at-a-glance read of what happened
+    ("done done done generating") without expanding it.
+    """
+    dots = []
+    for entry in day_entries:
+        status = entry.get("status", "")
+        label = _STATUS_LABELS.get(status, status)
+        for _ in range(max(int(entry.get("video_count", 1) or 1), 1)):
+            dots.append(
+                f'<span class="day-dot pill-{html.escape(status)}">'
+                f"{html.escape(label)}</span>"
+            )
+    return f'<div class="day-dots">{"".join(dots)}</div>'
 
 
 def _readiness_banner():
@@ -255,109 +282,126 @@ for entry in table_entries:
     entries_by_list_date.setdefault(entry["date"], []).append(entry)
 
 for entry_date_str in dates_in_order:
-    day_label = date.fromisoformat(entry_date_str).strftime("%A, %B %-d, %Y")
-    st.markdown(f"**{day_label}**")
-    for entry in entries_by_list_date[entry_date_str]:
-        status = entry["status"]
-        with st.container(border=True):
-            info_col, action_col = st.columns([5, 2])
-            with info_col:
-                st.markdown(
-                    f"{_status_chip(status)} &nbsp; **{html.escape(entry['topic'])}**",
-                    unsafe_allow_html=True,
-                )
-                meta_bits = [
-                    f"{_PRESET_ICONS.get(entry['preset'], '')} "
-                    f"{_PRESET_LABELS.get(entry['preset'], entry['preset'])}",
-                    f"{entry['video_count']} video(s)",
-                ]
-                if entry.get("post_time"):
-                    meta_bits.append(f"post at {entry['post_time']}")
-                if entry.get("language"):
-                    meta_bits.append(entry["language"])
-                st.caption(" · ".join(meta_bits))
-                if status == schedule_service.STATUS_FAILED and entry.get("error"):
-                    st.error(entry["error"][:300], icon="⚠️")
-                if entry.get("youtube_video_ids"):
-                    links = " · ".join(
-                        f"[video {i + 1}](https://studio.youtube.com/video/{vid}/edit)"
-                        for i, vid in enumerate(entry["youtube_video_ids"])
+    day_entries = entries_by_list_date[entry_date_str]
+    entry_date_obj = date.fromisoformat(entry_date_str)
+    day_label = entry_date_obj.strftime("%A, %B %-d, %Y")
+    total_videos = sum(
+        max(int(e.get("video_count", 1) or 1), 1) for e in day_entries
+    )
+    header = (
+        f"Show {len(day_entries)} entr"
+        f"{'y' if len(day_entries) == 1 else 'ies'} · {total_videos} video"
+        f"{'' if total_videos == 1 else 's'}"
+    )
+    # 折叠状态下用状态圆点概览当天进度，展开后才渲染完整卡片，
+    # 避免排期变多时列表把页面撑得过长。
+    if entry_date_obj == date.today():
+        st.markdown(f"**{day_label}** &nbsp;·&nbsp; today", unsafe_allow_html=True)
+    else:
+        st.markdown(f"**{day_label}**", unsafe_allow_html=True)
+    st.markdown(_day_summary_html(day_entries), unsafe_allow_html=True)
+    with st.expander(header, expanded=False):
+        for entry in day_entries:
+            status = entry["status"]
+            with st.container(border=True):
+                info_col, action_col = st.columns([5, 2])
+                with info_col:
+                    st.markdown(
+                        f"{_status_chip(status)} &nbsp; **{html.escape(entry['topic'])}**",
+                        unsafe_allow_html=True,
                     )
-                    st.caption(f"▶️ On YouTube (private): {links}")
-            with action_col:
-                actions = ["copy"]
-                if status == schedule_service.STATUS_FAILED:
-                    actions.insert(0, "retry")
-                if status != schedule_service.STATUS_GENERATING:
-                    actions.append("delete")
-                # 每个卡片最多三个操作，两列自适应；奇数个时最后一个占整行。
-                button_row = st.columns(2) if len(actions) > 1 else [st.container()]
-
-                def _slot(index: int):
-                    if len(actions) == 3 and index == 2:
-                        return st.container()
-                    return button_row[index % len(button_row)]
-
-                if "retry" in actions:
-                    with _slot(actions.index("retry")):
-                        if st.button(
-                            "🔄 Retry", key=f"retry_{entry['id']}",
-                            use_container_width=True,
-                        ):
-                            schedule_service.update_entry(
-                                entry["id"], status=schedule_service.STATUS_PENDING
-                            )
-                            st.rerun()
-                with _slot(actions.index("copy")):
-                    with st.popover("📑 Duplicate", use_container_width=True):
-                        st.caption(
-                            "Duplicate this entry onto other dates - same "
-                            "preset and count, optionally a new topic."
+                    meta_bits = [
+                        f"{_PRESET_ICONS.get(entry['preset'], '')} "
+                        f"{_PRESET_LABELS.get(entry['preset'], entry['preset'])}",
+                        f"{entry['video_count']} video(s)",
+                    ]
+                    if entry.get("post_time"):
+                        meta_bits.append(f"post at {entry['post_time']}")
+                    if entry.get("language"):
+                        meta_bits.append(entry["language"])
+                    st.caption(" · ".join(meta_bits))
+                    if status == schedule_service.STATUS_FAILED and entry.get("error"):
+                        st.error(entry["error"][:300], icon="⚠️")
+                    if entry.get("youtube_video_ids"):
+                        links = " · ".join(
+                            f"[video {i + 1}](https://studio.youtube.com/video/{vid}/edit)"
+                            for i, vid in enumerate(entry["youtube_video_ids"])
                         )
-                        upcoming_dates = [
-                            date.today() + timedelta(days=offset)
-                            for offset in range(0, 91)
-                        ]
-                        # 表单把控件改动攒到提交时才触发 rerun；
-                        # 否则每选一个日期 popover 都会被 rerun 关掉。
-                        with st.form(f"dup_form_{entry['id']}", border=False):
-                            dup_dates = st.multiselect(
-                                "Target dates (pick one or more)",
-                                options=upcoming_dates,
-                                format_func=lambda d: d.strftime("%a, %b %d %Y"),
-                                key=f"dup_dates_{entry['id']}",
-                                placeholder="Choose dates…",
+                        st.caption(f"▶️ On YouTube (private): {links}")
+                with action_col:
+                    actions = ["copy"]
+                    if status == schedule_service.STATUS_FAILED:
+                        actions.insert(0, "retry")
+                    if status != schedule_service.STATUS_GENERATING:
+                        actions.append("delete")
+                    # 每个卡片最多三个操作，两列自适应；奇数个时最后一个占整行。
+                    button_row = st.columns(2) if len(actions) > 1 else [st.container()]
+
+                    def _slot(index: int):
+                        if len(actions) == 3 and index == 2:
+                            return st.container()
+                        return button_row[index % len(button_row)]
+
+                    if "retry" in actions:
+                        with _slot(actions.index("retry")):
+                            if st.button(
+                                "🔄 Retry", key=f"retry_{entry['id']}",
+                                use_container_width=True,
+                            ):
+                                schedule_service.update_entry(
+                                    entry["id"], status=schedule_service.STATUS_PENDING
+                                )
+                                st.rerun()
+                    with _slot(actions.index("copy")):
+                        with st.popover("📑 Duplicate", use_container_width=True):
+                            st.caption(
+                                "Duplicate this entry onto other dates - same "
+                                "preset and count, optionally a new topic."
                             )
-                            dup_topic = st.text_input(
-                                "New topic (empty = keep the same)",
-                                key=f"dup_topic_{entry['id']}",
-                            )
-                            submitted_dup = st.form_submit_button(
-                                "Duplicate", type="primary"
-                            )
-                        if submitted_dup:
-                            dates = [d.isoformat() for d in dup_dates]
-                            if not dates:
-                                st.error("Pick at least one target date.")
-                            else:
+                            upcoming_dates = [
+                                date.today() + timedelta(days=offset)
+                                for offset in range(0, 91)
+                            ]
+                            # 表单把控件改动攒到提交时才触发 rerun；
+                            # 否则每选一个日期 popover 都会被 rerun 关掉。
+                            with st.form(f"dup_form_{entry['id']}", border=False):
+                                dup_dates = st.multiselect(
+                                    "Target dates (pick one or more)",
+                                    options=upcoming_dates,
+                                    format_func=lambda d: d.strftime("%a, %b %d %Y"),
+                                    key=f"dup_dates_{entry['id']}",
+                                    placeholder="Choose dates…",
+                                )
+                                dup_topic = st.text_input(
+                                    "New topic (empty = keep the same)",
+                                    key=f"dup_topic_{entry['id']}",
+                                )
+                                submitted_dup = st.form_submit_button(
+                                    "Duplicate", type="primary"
+                                )
+                            if submitted_dup:
+                                dates = [d.isoformat() for d in dup_dates]
+                                if not dates:
+                                    st.error("Pick at least one target date.")
+                                else:
+                                    try:
+                                        schedule_service.duplicate_entry(
+                                            entry["id"], dates, dup_topic.strip()
+                                        )
+                                        st.rerun()
+                                    except (KeyError, ValueError) as exc:
+                                        st.error(str(exc))
+                    if "delete" in actions:
+                        with _slot(actions.index("delete")):
+                            if st.button(
+                                "🗑 Delete", key=f"del_{entry['id']}",
+                                use_container_width=True,
+                            ):
                                 try:
-                                    schedule_service.duplicate_entry(
-                                        entry["id"], dates, dup_topic.strip()
-                                    )
+                                    schedule_service.delete_entry(entry["id"])
                                     st.rerun()
                                 except (KeyError, ValueError) as exc:
                                     st.error(str(exc))
-                if "delete" in actions:
-                    with _slot(actions.index("delete")):
-                        if st.button(
-                            "🗑 Delete", key=f"del_{entry['id']}",
-                            use_container_width=True,
-                        ):
-                            try:
-                                schedule_service.delete_entry(entry["id"])
-                                st.rerun()
-                            except (KeyError, ValueError) as exc:
-                                st.error(str(exc))
 
 # ------------------------------------------------------------------ manual run
 st.divider()

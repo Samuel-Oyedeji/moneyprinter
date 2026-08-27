@@ -546,6 +546,44 @@ def save_config():
                 os.remove(temp_path)
 
 
+def reload_config() -> None:
+    """重新从磁盘载入 config.toml，并就地刷新各配置段。
+
+    WebUI 与 API 在 Docker 下是两个独立进程：用户在 WebUI 里保存设置后，
+    API 进程内存中的配置仍停留在启动时刻。定时任务因此需要在每次运行前
+    重新读取磁盘配置，才能使用用户最新保存的音色、字幕、配乐等设置。
+
+    这里就地更新既有的 _SynchronizedConfig 实例（而不是重新绑定模块变量），
+    保证已经 ``from app.config import config`` 的调用方立即看到新值。
+    """
+    with _config_save_lock:
+        try:
+            fresh = _load_toml_config(config_file)
+        except Exception as exc:
+            # 配置文件可能正被另一个进程写入。此时保留内存中的旧配置继续运行，
+            # 比让整批排期任务直接失败更合理。
+            logger.warning(f"failed to reload config, keeping current values: {exc}")
+            return
+
+        _cfg.clear()
+        _cfg.update(fresh)
+        for section_name, section in (
+            ("app", app),
+            ("azure", azure),
+            ("siliconflow", siliconflow),
+            ("minimax_tts", minimax_tts),
+            ("elevenlabs", elevenlabs),
+            ("chatterbox", chatterbox),
+            ("fish_audio", fish_audio),
+            ("youtube", youtube),
+            ("discord", discord),
+            ("ui", ui),
+        ):
+            section.clear()
+            section.update(fresh.get(section_name, {}))
+        logger.info("config reloaded from disk")
+
+
 _cfg = load_config()
 app = _SynchronizedConfig(_cfg.get("app", {}))
 whisper = _cfg.get("whisper", {})

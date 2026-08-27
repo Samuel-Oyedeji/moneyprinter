@@ -391,6 +391,14 @@ category_id = "22"         # 22 = People & Blogs
 # drafts for manual publishing. Empty = server local time (in Docker that
 # is usually UTC).
 publish_timezone = ""
+# Declare YouTube's "altered or synthetic content" label on uploads.
+# YouTube only REQUIRES it for realistic synthetic content (footage that
+# could pass for a real person/place/event that never happened) and for
+# AI-generated music. Stock footage + a TTS voiceover + an LLM-written
+# script does not require it - scripts count as "production assistance".
+# Set true if you use AI-generated video (WaveSpeed) or AI-generated
+# background music (Sonilo / ElevenLabs Music).
+contains_synthetic_media = false
 
 [discord]
 # Discord webhook for "video ready to publish" alerts.

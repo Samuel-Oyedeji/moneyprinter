@@ -262,9 +262,39 @@ def _patch_entry(entry_id: str, **fields) -> None:
                 return
 
 
+def _resolve_bgm_settings(ui) -> tuple[str, str]:
+    """Map the saved WebUI BGM settings onto (bgm_type, bgm_file).
+
+    "custom" needs the saved uploaded file; if none is saved (or it no
+    longer resolves on this machine - e.g. settings copied from another
+    host), fall back to "random" so scheduled videos never come out silent.
+    """
+    from app.services import bgm as bgm_service
+
+    bgm_type = ui.get("bgm_type", "random")
+    bgm_file = ""
+    if bgm_type == "custom":
+        bgm_file = ui.get("custom_bgm_file", "") or ""
+        resolvable = False
+        if bgm_file:
+            try:
+                bgm_service.resolve_bgm_file(bgm_file)
+                resolvable = True
+            except ValueError:
+                pass
+        if not resolvable:
+            logger.warning(
+                f"custom BGM file is not available ({bgm_file!r}), "
+                "falling back to random background music for scheduled videos"
+            )
+            bgm_type, bgm_file = "random", ""
+    return bgm_type, bgm_file
+
+
 def _build_video_params(entry: dict) -> VideoParams:
     ui = config.ui
     preset = PRESETS[entry["preset"]]
+    bgm_type, bgm_file = _resolve_bgm_settings(ui)
     return VideoParams(
         video_subject=entry["topic"],
         video_count=entry["video_count"],
@@ -278,8 +308,13 @@ def _build_video_params(entry: dict) -> VideoParams:
         voice_name=ui.get("voice_name", ""),
         voice_volume=float(ui.get("voice_volume", 1.0)),
         voice_rate=float(ui.get("voice_rate", 1.0)),
-        bgm_type=ui.get("bgm_type", "random"),
+        bgm_type=bgm_type,
+        bgm_file=bgm_file,
         bgm_volume=float(ui.get("bgm_volume", 0.2)),
+        # 供 sonilo / elevenlabs 生成配乐模式使用；空值时服务端会使用
+        # 各自的默认提示词。
+        video_music_prompt=ui.get("elevenlabs_music_prompt", "")
+        or ui.get("sonilo_bgm_prompt", ""),
         subtitle_enabled=bool(ui.get("subtitle_enabled", True)),
         subtitle_position=ui.get("subtitle_position", "bottom"),
         custom_position=float(ui.get("custom_position", 70.0)),
@@ -500,6 +535,9 @@ def run_due_entries(run_date: Optional[str] = None) -> dict:
         return {"ran": 0, "skipped_reason": "already running"}
 
     try:
+        # WebUI 和 API 是两个进程：用户保存的设置只写入磁盘。这里先重新载入，
+        # 保证排期生成使用的是用户在界面上最后保存的配置。
+        config.reload_config()
         due = [
             e
             for e in list_entries(end_date=run_date)

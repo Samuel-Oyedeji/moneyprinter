@@ -22,6 +22,27 @@ from app.utils import utils
 
 st.set_page_config(page_title="Video Library", page_icon="🎞️", layout="wide")
 
+# 竖屏 9:16 视频会按列宽等比放大，在宽屏下单个播放器可高达上千像素。
+# 这里限制播放器高度并居中，让网格保持紧凑、可扫视的卡片式布局。
+st.markdown(
+    """
+<style>
+/* Streamlit 把 data-testid="stVideo" 直接放在 <video> 元素上，
+   因此这里必须选中元素本身，而不是它的父容器。 */
+video[data-testid="stVideo"] {
+    max-height: 300px;
+    width: auto !important;
+    max-width: 100%;
+    margin: 0 auto;
+    display: block;
+    border-radius: 8px;
+    background: #000;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
 st.page_link("Main.py", label="Back to generator", icon=":material/arrow_back:")
 st.title("🎞️ Video Library")
 st.caption(
@@ -85,7 +106,7 @@ with header_col:
             "Videos shown (newest first)",
             min_value=3,
             max_value=len(videos),
-            value=min(6, len(videos)),
+            value=min(8, len(videos)),
             step=1,
             help="Each shown video is streamed by the server; keep this low "
             "on slow connections.",
@@ -95,7 +116,7 @@ with header_col:
 with count_col:
     st.metric("In library", f"{len(videos)} videos · {total_size_mb:,.0f} MB")
 
-columns_per_row = 3
+columns_per_row = 4
 shown = videos[:show_count]
 for row_start in range(0, len(shown), columns_per_row):
     row_videos = shown[row_start : row_start + columns_per_row]
@@ -103,14 +124,11 @@ for row_start in range(0, len(shown), columns_per_row):
     for col, video in zip(cols, row_videos):
         with col, st.container(border=True):
             title = video["subject"] or video["script"][:60] or video["task_id"]
-            st.markdown(f"**{title[:80]}**")
+            st.markdown(f"**{title[:60]}**")
             created = datetime.fromtimestamp(video["mtime"]).strftime(
                 "%b %d, %Y %H:%M"
             )
-            st.caption(
-                f"{created} · {video['size_mb']:.0f} MB · "
-                f"{video['filename']} · `{video['task_id'][:8]}…`"
-            )
+            st.caption(f"{created} · {video['size_mb']:.0f} MB")
             st.video(video["path"])
             with st.popover("🗑 Delete files", use_container_width=True):
                 st.caption(

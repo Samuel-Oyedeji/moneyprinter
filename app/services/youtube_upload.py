@@ -64,6 +64,22 @@ class YoutubeUploadService:
         # 22 = "People & Blogs", YouTube's generic default.
         return str(config.youtube.get("category_id", "22"))
 
+    @property
+    def contains_synthetic_media(self) -> bool:
+        """Whether uploads declare YouTube's "altered or synthetic content" label.
+
+        YouTube only requires this for REALISTIC synthetic content - footage
+        that could pass for a real person, place or event that never happened
+        - and for AI-generated music. Stock footage with a TTS voiceover and
+        an LLM-written script is exempt (scripts count as "production
+        assistance"), so this defaults to off.
+
+        Turn it on in config.toml when a video really does need it, e.g. when
+        using AI-generated video sources (WaveSpeed) or AI-generated
+        background music (Sonilo / ElevenLabs Music).
+        """
+        return bool(config.youtube.get("contains_synthetic_media", False))
+
     def is_configured(self) -> bool:
         return self.enabled and os.path.isfile(self.token_file)
 
@@ -164,9 +180,11 @@ class YoutubeUploadService:
         status: dict = {
             "privacyStatus": privacy_status or self.default_privacy_status,
             "selfDeclaredMadeForKids": False,
-            # 素材由 LLM + TTS 生成，按 YouTube 政策声明合成媒体。
-            "containsSyntheticMedia": True,
         }
+        # 仅在配置显式开启时声明合成媒体。YouTube 只对"逼真的"合成内容和
+        # AI 生成音乐强制要求该标签；素材视频 + TTS 旁白不属于该范围。
+        if self.contains_synthetic_media:
+            status["containsSyntheticMedia"] = True
         if publish_at:
             status["publishAt"] = publish_at
             status["privacyStatus"] = "private"
