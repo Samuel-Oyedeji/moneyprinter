@@ -111,9 +111,10 @@ with st.expander("➕ Schedule videos", expanded=False):
             entry_date = st.date_input(
                 "Date", min_value=date.today(), value=date.today()
             )
-            post_time = st.text_input(
-                "Planned post time (HH:MM, optional)",
-                value="",
+            post_time_value = st.time_input(
+                "Planned post time (optional)",
+                value=None,
+                step=timedelta(minutes=15),
                 help="Informational: included in the Discord alert so you know "
                 "when you meant to publish.",
             )
@@ -145,7 +146,9 @@ with st.expander("➕ Schedule videos", expanded=False):
                     topic=topic,
                     video_count=int(video_count),
                     preset=preset,
-                    post_time=post_time.strip(),
+                    post_time=(
+                        post_time_value.strftime("%H:%M") if post_time_value else ""
+                    ),
                     language=language.strip(),
                 )
                 st.success(f"Scheduled {int(video_count)} video(s) on {entry_date}.")
@@ -304,31 +307,36 @@ for entry_date_str in dates_in_order:
                             )
                             st.rerun()
                 with _slot(actions.index("copy")):
-                    with st.popover("📋 Copy", use_container_width=True):
+                    with st.popover("📑 Duplicate", use_container_width=True):
                         st.caption(
                             "Duplicate this entry onto other dates - same "
                             "preset and count, optionally a new topic."
                         )
-                        dup_dates_text = st.text_input(
-                            "Target dates (comma-separated YYYY-MM-DD)",
-                            key=f"dup_dates_{entry['id']}",
-                            placeholder="2026-09-01, 2026-09-03",
-                        )
-                        dup_topic = st.text_input(
-                            "New topic (empty = keep the same)",
-                            key=f"dup_topic_{entry['id']}",
-                        )
-                        if st.button(
-                            "Duplicate", key=f"dup_go_{entry['id']}",
-                            type="primary",
-                        ):
-                            dates = [
-                                d.strip()
-                                for d in dup_dates_text.split(",")
-                                if d.strip()
-                            ]
+                        upcoming_dates = [
+                            date.today() + timedelta(days=offset)
+                            for offset in range(0, 91)
+                        ]
+                        # 表单把控件改动攒到提交时才触发 rerun；
+                        # 否则每选一个日期 popover 都会被 rerun 关掉。
+                        with st.form(f"dup_form_{entry['id']}", border=False):
+                            dup_dates = st.multiselect(
+                                "Target dates (pick one or more)",
+                                options=upcoming_dates,
+                                format_func=lambda d: d.strftime("%a, %b %d %Y"),
+                                key=f"dup_dates_{entry['id']}",
+                                placeholder="Choose dates…",
+                            )
+                            dup_topic = st.text_input(
+                                "New topic (empty = keep the same)",
+                                key=f"dup_topic_{entry['id']}",
+                            )
+                            submitted_dup = st.form_submit_button(
+                                "Duplicate", type="primary"
+                            )
+                        if submitted_dup:
+                            dates = [d.isoformat() for d in dup_dates]
                             if not dates:
-                                st.error("Enter at least one target date.")
+                                st.error("Pick at least one target date.")
                             else:
                                 try:
                                     schedule_service.duplicate_entry(

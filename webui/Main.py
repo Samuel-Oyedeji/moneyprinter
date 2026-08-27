@@ -1485,11 +1485,16 @@ def _render_top_bar():
             width="stretch",
         ):
             # styles.css 隐藏了 Streamlit 顶栏（含侧边栏展开按钮），
-            # 因此在操作区提供显式的日历页入口。
+            # 因此在操作区提供显式的日历页和视频库入口。
             st.page_link(
                 "pages/Schedule.py",
                 label="Calendar",
                 icon=":material/calendar_month:",
+            )
+            st.page_link(
+                "pages/Library.py",
+                label="Library",
+                icon=":material/video_library:",
             )
 
             _render_task_manager_entry()
