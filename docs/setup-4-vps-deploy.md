@@ -53,13 +53,15 @@ sudo apt-get update && sudo apt-get install -y git
 
 ```bash
 cd ~
-git clone https://github.com/harry0703/MoneyPrinterTurbo.git
+git clone https://github.com/Samuel-Oyedeji/moneyprinter.git MoneyPrinterTurbo
 cd MoneyPrinterTurbo
 ```
 
-> If you push your modified version (with the scheduler) to your own GitHub
-> fork, clone that instead. If you don't want to use GitHub, copy the whole
-> project from your Mac (run this **on your Mac**, and note the trailing
+> The trailing `MoneyPrinterTurbo` matters: the repo is named `moneyprinter`,
+> but every path later in this guide assumes `~/MoneyPrinterTurbo`, so we
+> clone into that folder name explicitly.
+>
+> If you don't want to use GitHub, copy the whole project from your Mac (run this **on your Mac**, and note the trailing
 > slash after the folder name):
 >
 > ```bash
