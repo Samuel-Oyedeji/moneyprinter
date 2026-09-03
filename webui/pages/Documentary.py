@@ -101,19 +101,31 @@ elif serpapi_quota and (serpapi_quota.get("left") or 0) < research_service.QUOTA
     )
 
 # --------------------------------------------------------- research settings
-with st.expander("🔎 Research settings (SerpApi)"):
-    serpapi_key = st.text_input(
+with st.expander("🔎 Research settings (SerpApi)", expanded=not serpapi_ready):
+    key_col, save_col = st.columns([4, 1], vertical_alignment="bottom")
+    serpapi_key = key_col.text_input(
         "SerpApi API key",
         value=str(config.documentary.get("serpapi_api_key", "") or ""),
         type="password",
         help="https://serpapi.com/manage-api-key — the free tier includes "
-        "250 searches/month.",
+        "250 searches/month. Paste a key and hit Save; the quota refreshes "
+        "against the new key immediately.",
     )
-    if serpapi_key != str(config.documentary.get("serpapi_api_key", "") or ""):
-        config.documentary["serpapi_api_key"] = serpapi_key
+    if save_col.button("💾 Save key", type="primary" if not serpapi_ready else "secondary"):
+        config.documentary["serpapi_api_key"] = serpapi_key.strip()
         config.save_config()
         _refresh_serpapi_quota()
+        st.session_state["serpapi_key_saved"] = True
         st.rerun()
+
+    if st.session_state.pop("serpapi_key_saved", False):
+        saved_quota = st.session_state.get("serpapi_quota")
+        if saved_quota and saved_quota.get("error"):
+            st.error(f"Key saved, but: {saved_quota['error']}")
+        elif saved_quota and saved_quota.get("left") is not None:
+            st.success(f"Key saved — {saved_quota['left']} searches left.")
+        else:
+            st.success("Key saved.")
 
     quota_col, refresh_col = st.columns([3, 1], vertical_alignment="center")
     if serpapi_quota is None:
