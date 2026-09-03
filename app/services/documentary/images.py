@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 import requests
 from loguru import logger
 
+from app.config import config
 from app.services import material
 from app.services.documentary import llm_bridge, store
 
@@ -45,6 +46,18 @@ def _url_path(url: str) -> str:
         return (urlparse(url).path or "").lower()
     except ValueError:
         return url.lower()
+
+
+def _optional_api_key(cfg_key: str) -> str:
+    """Stock providers are optional here: no key just skips that provider.
+
+    material.get_api_key() raises when unset because the short-form pipeline
+    cannot work without its material source; the documentary pipeline still
+    has Wikimedia and Openverse.
+    """
+    if not config.app.get(cfg_key):
+        return ""
+    return material.get_api_key(cfg_key)
 
 
 def _get(url: str, **kwargs):
@@ -146,7 +159,7 @@ def search_openverse(query: str, count: int) -> list[dict]:
 
 
 def search_pexels_photos(query: str, count: int) -> list[dict]:
-    api_key = material.get_api_key("pexels_api_keys")
+    api_key = _optional_api_key("pexels_api_keys")
     if not api_key:
         return []
     try:
@@ -178,7 +191,7 @@ def search_pexels_photos(query: str, count: int) -> list[dict]:
 
 
 def search_pixabay_photos(query: str, count: int) -> list[dict]:
-    api_key = material.get_api_key("pixabay_api_keys")
+    api_key = _optional_api_key("pixabay_api_keys")
     if not api_key:
         return []
     try:
