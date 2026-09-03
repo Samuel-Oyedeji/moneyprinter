@@ -531,6 +531,9 @@ bgm_volume = 0.10
 # image candidates; the best-scoring image is preselected, and used
 # directly when a project has auto-approve images enabled.
 vision_model = "google/gemini-3.5-flash"
+# Image-generation model that designs YouTube thumbnails from the film's
+# strongest archival image (falls back to a programmatic composition).
+thumbnail_model = "google/gemini-3.1-flash-image"
 # Opening title card: event name + date over the first image.
 intro_enabled = true
 intro_font = "BeVietnamPro-Bold.ttf"

@@ -205,6 +205,280 @@ with st.expander("🎙 Narration voice settings"):
         config.save_config()
         st.success(f"Narration voice saved: {chosen_voice}")
 
+
+# ============================================================ page sections
+import threading
+from datetime import date as date_cls
+from datetime import time as time_cls
+from datetime import timedelta
+
+from app.services.documentary import costs as costs_service
+from app.services.documentary import doc_schedule, thumbnail
+
+DOC_STATUS_CHIPS = {
+    doc_schedule.STATUS_PENDING: "🕐 pending",
+    doc_schedule.STATUS_GENERATING: "⚙️ generating",
+    doc_schedule.STATUS_UPLOADING: "⬆️ uploading",
+    doc_schedule.STATUS_SCHEDULED: "📅 scheduled on YouTube",
+    doc_schedule.STATUS_UPLOADED: "📥 uploaded (private draft)",
+    doc_schedule.STATUS_FAILED: "❌ failed",
+}
+
+
+def _upload_load_line(day_iso: str) -> tuple[str, bool]:
+    load = doc_schedule.daily_upload_load(day_iso)
+    line = (
+        f"{load['total']}/{load['budget']} uploads planned on {day_iso} "
+        f"(Shorts {load['shorts']} + documentaries {load['documentaries']}). "
+        "YouTube's API quota allows ~6 uploads/day."
+    )
+    return line, load["total"] >= load["budget"]
+
+
+def _finished_projects() -> list[dict]:
+    finished = []
+    for project in store.list_projects():
+        if project.get("status") != store.STATUS_DONE:
+            continue
+        final_path = os.path.join(
+            utils.task_dir(project["project_id"]), "final-1.mp4"
+        )
+        if os.path.exists(final_path):
+            project["_final_path"] = final_path
+            finished.append(project)
+    return finished
+
+
+def _schedule_controls(prefix: str, day_default=None):
+    """Shared date/time picker with the daily upload-budget indicator."""
+    date_col, time_col = st.columns(2)
+    day = date_col.date_input(
+        "Publish date",
+        value=day_default or (date_cls.today() + timedelta(days=1)),
+        min_value=date_cls.today(),
+        key=f"{prefix}_date",
+    )
+    at = time_col.time_input(
+        "Publish time", value=time_cls(18, 0), key=f"{prefix}_time"
+    )
+    line, full = _upload_load_line(day.isoformat())
+    (st.error if full else st.caption)(line)
+    return day, at, full
+
+
+def _render_library_tab():
+    st.subheader("📚 Documentary library")
+    projects = _finished_projects()
+    if not projects:
+        st.info("No finished films yet — complete a project in the Studio tab.")
+        return
+
+    for project in projects:
+        pid = project["project_id"]
+        script = store.load_script(pid) or {}
+        youtube_meta = script.get("youtube", {})
+        with st.container(border=True):
+            thumb_col, info_col = st.columns([2, 3])
+            with thumb_col:
+                thumb_path = thumbnail.thumbnail_path(pid)
+                if os.path.isfile(thumb_path):
+                    st.image(thumb_path)
+                else:
+                    st.caption("No thumbnail yet.")
+                gen_col, up_col = st.columns(2)
+                if gen_col.button(
+                    "🎨 " + ("Redesign" if os.path.isfile(thumb_path) else "Design"),
+                    key=f"lib_thumb_{pid}",
+                ):
+                    costs_service.set_project(pid)
+                    with st.spinner("Designing thumbnail with the image model…"):
+                        result = thumbnail.ensure_thumbnail(
+                            project, regenerate=True
+                        )
+                    if result:
+                        st.rerun()
+                    st.error("Thumbnail design failed — check the logs.")
+                uploaded_thumb = up_col.file_uploader(
+                    "Upload custom",
+                    type=["jpg", "jpeg", "png"],
+                    key=f"lib_thumb_up_{pid}",
+                    label_visibility="collapsed",
+                )
+                if uploaded_thumb is not None:
+                    custom_hash = hash(uploaded_thumb.getvalue())
+                    if st.session_state.get(f"lib_thumb_done_{pid}") != custom_hash:
+                        thumbnail._save_cover(
+                            uploaded_thumb.getvalue(), thumb_path
+                        )
+                        st.session_state[f"lib_thumb_done_{pid}"] = custom_hash
+                        st.rerun()
+            with info_col:
+                st.markdown(f"**{youtube_meta.get('title') or project['topic']}**")
+                cost_summary = costs_service.summarize(pid)
+                st.caption(
+                    f"{script.get('word_count', 0)} words · "
+                    f"~{max(script.get('word_count', 0), 1) // 150} min · "
+                    f"cost ${cost_summary['total']:.2f}"
+                    + ("*" if cost_summary["any_estimated"] else "")
+                )
+                if youtube_meta.get("description"):
+                    with st.expander("Description & tags"):
+                        st.write(youtube_meta.get("description", ""))
+                        st.caption(", ".join(youtube_meta.get("tags", [])))
+                already = [
+                    e
+                    for e in doc_schedule.list_entries()
+                    if e.get("project_id") == pid
+                    and e.get("status") != doc_schedule.STATUS_FAILED
+                ]
+                if already:
+                    entry = already[-1]
+                    st.info(
+                        f"{DOC_STATUS_CHIPS.get(entry['status'], entry['status'])}"
+                        f" · {entry['date']} {entry.get('post_time', '')}"
+                    )
+                else:
+                    day, at, full = _schedule_controls(f"lib_{pid}")
+                    if st.button(
+                        "📅 Schedule upload",
+                        key=f"lib_sched_{pid}",
+                        type="primary",
+                        disabled=full,
+                    ):
+                        doc_schedule.create_entry(
+                            date=day.isoformat(),
+                            post_time=at.strftime("%H:%M"),
+                            mode="library",
+                            project_id=pid,
+                            topic=project["topic"],
+                        )
+                        st.rerun()
+
+
+def _render_schedule_tab():
+    st.subheader("📅 Documentary schedule")
+    with st.container(border=True):
+        st.markdown("**🤖 Generate & schedule automatically**")
+        st.caption(
+            "On the publish date the full autopilot pipeline runs — research, "
+            "script, images, render — and the film is uploaded with the "
+            "publish time set. No checkpoints."
+        )
+        auto_topic = st.text_input("Topic", key="auto_topic")
+        auto_notes = st.text_area(
+            "Background notes (optional)", key="auto_notes", height=80
+        )
+        auto_minutes = st.slider(
+            "Target length (minutes)", 3.0, 15.0, 8.0, 0.5, key="auto_minutes"
+        )
+        day, at, full = _schedule_controls("auto")
+        if st.button(
+            "🤖 Queue it", type="primary", disabled=full or not auto_topic.strip()
+        ):
+            doc_schedule.create_entry(
+                date=day.isoformat(),
+                post_time=at.strftime("%H:%M"),
+                mode="auto",
+                topic=auto_topic,
+                user_notes=auto_notes,
+                target_minutes=auto_minutes,
+            )
+            st.success("Queued — it will generate and upload on the due date.")
+            st.rerun()
+
+    entries = doc_schedule.list_entries()
+    if not entries:
+        st.info("Nothing scheduled yet.")
+    for entry in entries:
+        with st.container(border=True):
+            info_col, action_col = st.columns([4, 1])
+            label = entry.get("topic") or entry.get("project_id", "")
+            mode_icon = "🤖" if entry["mode"] == "auto" else "📚"
+            info_col.markdown(
+                f"{mode_icon} **{label[:70]}**  \n"
+                f"{entry['date']} {entry.get('post_time', '')} · "
+                f"{DOC_STATUS_CHIPS.get(entry['status'], entry['status'])}"
+            )
+            if entry.get("error"):
+                info_col.caption(f"⚠️ {entry['error'][:200]}")
+            if entry["status"] == doc_schedule.STATUS_FAILED:
+                if action_col.button("🔁 Retry", key=f"sch_retry_{entry['id']}"):
+                    doc_schedule.reset_entry(entry["id"])
+                    st.rerun()
+            if entry["status"] in (
+                doc_schedule.STATUS_PENDING,
+                doc_schedule.STATUS_FAILED,
+            ):
+                if action_col.button("🗑", key=f"sch_del_{entry['id']}"):
+                    doc_schedule.delete_entry(entry["id"])
+                    st.rerun()
+
+    st.divider()
+    run_col, hint_col = st.columns([1, 3])
+    if run_col.button("▶ Run due entries now"):
+        threading.Thread(
+            target=doc_schedule.run_due_entries, daemon=True
+        ).start()
+        st.success("Run started in the background — watch statuses above.")
+    hint_col.caption(
+        "Runs automatically with the existing cron hook: "
+        "`POST /api/v1/schedules/run` now also triggers documentary entries."
+    )
+
+
+def _render_uploads_tab():
+    st.subheader("⬆️ Uploads")
+    entries = [
+        e
+        for e in doc_schedule.list_entries()
+        if e.get("youtube_video_id")
+        or e.get("status")
+        in (
+            doc_schedule.STATUS_GENERATING,
+            doc_schedule.STATUS_UPLOADING,
+            doc_schedule.STATUS_FAILED,
+        )
+    ]
+    if not entries:
+        st.info("No uploads yet — schedule a film from the Library tab.")
+        return
+    for entry in entries:
+        with st.container(border=True):
+            label = entry.get("topic") or entry.get("project_id", "")
+            st.markdown(
+                f"**{label[:70]}**  \n"
+                f"{entry['date']} {entry.get('post_time', '')} · "
+                f"{DOC_STATUS_CHIPS.get(entry['status'], entry['status'])}"
+            )
+            if entry.get("youtube_video_id"):
+                st.markdown(
+                    f"▶ [youtu.be/{entry['youtube_video_id']}]"
+                    f"(https://youtu.be/{entry['youtube_video_id']})"
+                )
+            if entry.get("error"):
+                st.caption(f"⚠️ {entry['error'][:300]}")
+                if st.button("🔁 Retry", key=f"upl_retry_{entry['id']}"):
+                    doc_schedule.reset_entry(entry["id"])
+                    st.rerun()
+
+
+section = st.segmented_control(
+    "Section",
+    ["🎬 Studio", "📚 Library", "📅 Schedule", "⬆️ Uploads"],
+    default="🎬 Studio",
+    key="doc_section",
+    label_visibility="collapsed",
+)
+if section == "📚 Library":
+    _render_library_tab()
+    st.stop()
+elif section == "📅 Schedule":
+    _render_schedule_tab()
+    st.stop()
+elif section == "⬆️ Uploads":
+    _render_uploads_tab()
+    st.stop()
+
 # ---------------------------------------------------------------- new project
 with st.expander("➕ New documentary project", expanded=not store.list_projects()):
     with st.form("new_project"):

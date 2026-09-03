@@ -202,5 +202,16 @@ def run_schedules(request: Request, body: ScheduleRunRequest = None):
         name="schedule-run",
     )
     thread.start()
+
+    # Documentary entries live on their own calendar but share this cron
+    # hook; the runner has its own lock, so double triggers are safe.
+    from app.services.documentary import doc_schedule as documentary_schedule
+
+    threading.Thread(
+        target=documentary_schedule.run_due_entries,
+        kwargs={"run_date": run_date},
+        daemon=True,
+        name="documentary-schedule-run",
+    ).start()
     logger.info(f"schedule run triggered, request_id: {request_id}")
     return utils.get_response(200, {"triggered": True, "date": run_date})
