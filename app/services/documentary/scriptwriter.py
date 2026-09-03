@@ -139,6 +139,10 @@ places — never identifiable victims or graphic injury.
 Respond ONLY with a single valid JSON object, no markdown fences:
 {{
   "title": "working title for the film",
+  "intro": {{
+    "title": "short on-screen title card: the event's name, <=6 words",
+    "date_line": "place and date line, e.g. 'Lagos, Nigeria — 27 January 2002'"
+  }},
   "sections": [
     {{"name": "cold_open|background|the_day|the_disaster|aftermath|investigation|legacy",
       "paragraphs": [

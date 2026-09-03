@@ -30,8 +30,10 @@ FPS = 25
 PARAGRAPH_GAP = 0.7  # seconds of silence after each paragraph
 SECTION_GAP = 1.4  # longer beat between sections
 FADE_DURATION = 0.4
+INTRO_DURATION = 5.0
 
 DEFAULT_VOICE = "en-GB-RyanNeural-Male"
+DEFAULT_INTRO_FONT = "BeVietnamPro-Bold.ttf"
 
 
 def _ffmpeg_exe() -> str:
@@ -97,11 +99,13 @@ def _measure_durations(paragraphs: list[dict]) -> None:
         paragraph["display_seconds"] = paragraph["narration_seconds"] + gap
 
 
-def _build_narration_track(project_id: str, paragraphs: list[dict]) -> str:
+def _build_narration_track(
+    project_id: str, paragraphs: list[dict], lead_in_seconds: float = 0.0
+) -> str:
     """Concatenate paragraph audio with the same gaps the video uses."""
     from pydub import AudioSegment
 
-    track = AudioSegment.empty()
+    track = AudioSegment.silent(duration=int(lead_in_seconds * 1000))
     for paragraph in paragraphs:
         segment = AudioSegment.from_file(paragraph["audio_file"])
         gap_ms = int((paragraph["display_seconds"] - paragraph["narration_seconds"]) * 1000)
@@ -153,6 +157,92 @@ def _ken_burns_filter(index: int, duration: float) -> str:
         f"fade=t=out:st={fade_out_start:.2f}:d={FADE_DURATION},"
         f"format=yuv420p"
     )
+
+
+def _intro_font_file() -> str:
+    font_name = str(
+        config.documentary.get("intro_font", "") or DEFAULT_INTRO_FONT
+    ).strip()
+    if os.path.isabs(font_name) and os.path.isfile(font_name):
+        return font_name
+    return os.path.join(utils.root_dir(), "resource", "fonts", font_name)
+
+
+def _intro_texts(project: dict, script: dict) -> tuple[str, str]:
+    intro = script.get("intro") or {}
+    title = str(intro.get("title", "")).strip() or str(
+        script.get("title", "") or project["topic"]
+    )
+    date_line = str(intro.get("date_line", "")).strip()
+    # Older scripts predate the intro field; a "Name: Place, Date" title
+    # splits naturally into the two lines of the card.
+    if not date_line and ":" in title:
+        title, date_line = (part.strip() for part in title.split(":", 1))
+    return title, date_line
+
+
+def _render_intro_segment(
+    project: dict, script: dict, background_image: str, output_dir: str
+) -> str:
+    """Title card: the first image blurred and darkened, event name + date."""
+    title, date_line = _intro_texts(project, script)
+    font = _intro_font_file()
+    if not os.path.isfile(font):
+        raise RuntimeError(f"intro font not found: {font}")
+
+    # drawtext escaping is two-layered (filtergraph + option parser) and
+    # brittle for titles with apostrophes/colons; textfile= sidesteps it.
+    title_file = os.path.join(output_dir, "intro-title.txt")
+    with open(title_file, "w", encoding="utf-8") as f:
+        f.write(title)
+    date_file = os.path.join(output_dir, "intro-date.txt")
+    with open(date_file, "w", encoding="utf-8") as f:
+        f.write(date_line)
+
+    fade_out_start = INTRO_DURATION - 0.8
+    draw_common = f"fontfile='{font}':fontcolor=white:x=(w-text_w)/2"
+    filters = (
+        f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase,"
+        f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT},"
+        f"boxblur=10,eq=brightness=-0.28:saturation=0.65,"
+        f"drawtext={draw_common}:y=(h/2)-110:fontsize=88:"
+        f"textfile='{title_file}',"
+    )
+    if date_line:
+        filters += (
+            f"drawtext={draw_common}:y=(h/2)+30:fontsize=40:alpha=0.9:"
+            f"textfile='{date_file}',"
+        )
+    filters += (
+        f"fade=t=in:st=0:d=0.8,fade=t=out:st={fade_out_start:.2f}:d=0.8,"
+        f"format=yuv420p,fps={FPS}"
+    )
+
+    intro_path = os.path.join(output_dir, "seg-intro.mp4")
+    _run_ffmpeg(
+        [
+            "-loop",
+            "1",
+            "-i",
+            background_image,
+            "-t",
+            f"{INTRO_DURATION}",
+            "-vf",
+            filters,
+            "-r",
+            str(FPS),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-an",
+            intro_path,
+        ],
+        context="intro segment",
+    )
+    return intro_path
 
 
 def _render_segment(
@@ -209,10 +299,12 @@ def _format_srt_time(seconds: float) -> str:
     )
 
 
-def _write_srt(paragraphs: list[dict], srt_path: str) -> None:
+def _write_srt(
+    paragraphs: list[dict], srt_path: str, offset_seconds: float = 0.0
+) -> None:
     # Paragraph-level timing: coarse, but accurate at the beat level, and
     # good enough for YouTube to refine with its own alignment.
-    cursor = 0.0
+    cursor = offset_seconds
     with open(srt_path, "w", encoding="utf-8") as f:
         for index, paragraph in enumerate(paragraphs, start=1):
             start = cursor
@@ -293,6 +385,16 @@ def run_render(project: dict) -> str:
     logger.info(f"narration timed at {total / 60:.1f} minutes")
 
     segment_paths = []
+    intro_seconds = 0.0
+    if bool(config.documentary.get("intro_enabled", True)):
+        logger.info("rendering intro title card")
+        segment_paths.append(
+            _render_intro_segment(
+                project, script, paragraphs[0]["image_path"],
+                store.render_dir(project_id),
+            )
+        )
+        intro_seconds = INTRO_DURATION
     for index, paragraph in enumerate(paragraphs):
         logger.info(f"segment {index + 1}/{len(paragraphs)} ({paragraph['key']})")
         segment_paths.append(
@@ -300,7 +402,9 @@ def run_render(project: dict) -> str:
         )
 
     visual_path = _concat_segments(project_id, segment_paths)
-    narration_path = _build_narration_track(project_id, paragraphs)
+    narration_path = _build_narration_track(
+        project_id, paragraphs, lead_in_seconds=intro_seconds
+    )
 
     task_dir = utils.task_dir(project_id)
     final_path = os.path.join(task_dir, "final-1.mp4")
@@ -326,7 +430,11 @@ def run_render(project: dict) -> str:
         context="final mux",
     )
 
-    _write_srt(paragraphs, os.path.join(task_dir, "final-1.srt"))
+    _write_srt(
+        paragraphs,
+        os.path.join(task_dir, "final-1.srt"),
+        offset_seconds=intro_seconds,
+    )
     _publish_to_task_library(project, script, images, final_path)
     logger.success(f"documentary rendered: {final_path}")
     return final_path

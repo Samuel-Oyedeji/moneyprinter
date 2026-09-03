@@ -28,6 +28,7 @@ from app.services.documentary import llm_bridge, store
 
 CANDIDATES_PER_PROVIDER = 2
 MAX_CANDIDATES_PER_CUE = 6
+RESCUE_SCORE_THRESHOLD = 4.0
 DOWNLOAD_TIMEOUT = 30
 DOWNLOAD_BYTE_CAP = 15 * 1024 * 1024
 
@@ -306,6 +307,129 @@ def gather_candidates_for_cue(project_id: str, key: str, queries: dict) -> list[
     return candidates
 
 
+# ------------------------------------------------------------------ scoring
+def score_candidates(item: dict) -> None:
+    """Have the vision model view and score this cue's candidates.
+
+    Scores land on the candidates and the best one becomes the selection, so
+    autopilot picks it directly and manual review starts from the best guess.
+    A vision failure keeps the provider order selection instead of failing
+    the whole sourcing stage.
+    """
+    candidates = item.get("candidates") or []
+    if len(candidates) < 2:
+        return
+
+    prompt = f"""
+# Role: Documentary Picture Editor
+
+You are choosing the still photograph for one narration beat of a factual
+historical documentary. The images below are numbered starting at 1, in
+order. View each image and score it 0-10 for this beat.
+
+## Narration beat
+{item.get("text_preview", "")}
+
+## Picture brief
+{item.get("cue", "")}
+
+## Scoring criteria
+- Relevance to the brief and narration (most important).
+- Looks like a real photograph of a real place/thing. Posters, logos, maps,
+  drawings, watermarked images, text-heavy images and obvious stock-studio
+  shots score at most 3.
+- Era plausibility: a photo that visibly contradicts the era scores low.
+- Respectful: identifiable dead/injured people means score 0.
+- Composition: usable as a full-screen 16:9 documentary still.
+
+## Output
+Respond ONLY with a JSON array, one entry per image, in order:
+[{{"index": 1, "score": 7.5, "reason": "short reason"}}, ...]
+""".strip()
+
+    try:
+        scores = llm_bridge.generate_vision_json(
+            prompt, [c["local_path"] for c in candidates]
+        )
+        if not isinstance(scores, list):
+            raise ValueError("vision scores are not a list")
+        for entry in scores:
+            index = int(entry.get("index", 0)) - 1
+            if 0 <= index < len(candidates):
+                candidates[index]["score"] = float(entry.get("score", 0))
+                candidates[index]["score_reason"] = str(entry.get("reason", ""))
+        best = max(
+            range(len(candidates)),
+            key=lambda i: candidates[i].get("score", -1),
+        )
+        item["selected"] = best
+    except Exception as exc:
+        logger.warning(f"vision scoring failed for cue {item.get('key')}: {exc}")
+
+
+def _best_score(item: dict) -> float:
+    return max(
+        (c.get("score", -1) for c in item.get("candidates") or []), default=-1
+    )
+
+
+def rescue_low_scoring_cue(project_id: str, item: dict) -> None:
+    """One retry for cues where every candidate scored poorly.
+
+    Uses the vision model's rejection reasons to ask for a better archival
+    query, re-sources the cue, and keeps whichever candidate set scored
+    higher. Bounded to a single retry per cue to keep autopilot predictable.
+    """
+    reasons = "; ".join(
+        c.get("score_reason", "")
+        for c in item.get("candidates") or []
+        if c.get("score_reason")
+    )
+    prompt = f"""
+# Role: Photo Researcher
+
+An image search for a documentary beat returned only poor candidates.
+Suggest ONE better search query (2-5 words, concrete nouns/places, English)
+for a photo archive. Respond ONLY with JSON: {{"query": "..."}}
+
+## Picture brief
+{item.get("cue", "")}
+
+## Why the previous candidates were rejected
+{reasons or "(no reasons available)"}
+
+## Previous queries
+{json.dumps(item.get("queries", {}))}
+""".strip()
+    try:
+        suggestion = llm_bridge.generate_json(prompt)
+        new_query = str((suggestion or {}).get("query", "")).strip()
+    except Exception as exc:
+        logger.warning(f"rescue query planning failed for {item.get('key')}: {exc}")
+        return
+    if not new_query:
+        return
+
+    logger.info(f"rescue re-search for {item['key']}: {new_query!r}")
+    retry_item = {
+        **item,
+        "queries": {"archival": new_query, "stock": new_query},
+        "candidates": gather_candidates_for_cue(
+            project_id, f"{item['key']}r", {"archival": new_query, "stock": new_query}
+        ),
+    }
+    retry_item["selected"] = 0 if retry_item["candidates"] else None
+    score_candidates(retry_item)
+    if _best_score(retry_item) > _best_score(item):
+        item.update(
+            {
+                "queries": retry_item["queries"],
+                "candidates": retry_item["candidates"],
+                "selected": retry_item["selected"],
+            }
+        )
+
+
 # ------------------------------------------------------------------- stages
 def build_items_from_script(script: dict) -> list[dict]:
     items = []
@@ -339,8 +463,12 @@ def run_image_sourcing(project: dict) -> dict:
             project_id, item["key"], item["queries"]
         )
         item["selected"] = 0 if item["candidates"] else None
+        score_candidates(item)
+        if 0 <= _best_score(item) < RESCUE_SCORE_THRESHOLD:
+            rescue_low_scoring_cue(project_id, item)
         logger.info(
-            f"cue {item['key']}: {len(item['candidates'])} candidates "
+            f"cue {item['key']}: {len(item['candidates'])} candidates, "
+            f"selected #{item['selected']}, best score {_best_score(item):.1f} "
             f"({item['queries']})"
         )
 
@@ -362,6 +490,7 @@ def research_cue(project_id: str, key: str, query: str) -> dict:
                 project_id, key, item["queries"]
             )
             item["selected"] = 0 if item["candidates"] else None
+            score_candidates(item)
             break
     store.save_images(project_id, images)
     return images

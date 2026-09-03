@@ -54,6 +54,64 @@ if not serpapi_ready:
         icon="🔑",
     )
 
+# ------------------------------------------------------------ voice settings
+with st.expander("🎙 Narration voice settings"):
+    from app.services import voice as voice_service
+
+    current_voice = str(
+        config.documentary.get("voice_name", "en-GB-RyanNeural-Male")
+    )
+    st.caption(f"Current narration voice: `{current_voice}`")
+
+    key_col, fetch_col = st.columns([3, 1], vertical_alignment="bottom")
+    elevenlabs_key = key_col.text_input(
+        "ElevenLabs API key",
+        value=str(config.elevenlabs.get("api_key", "") or ""),
+        type="password",
+        help="Stored in config.toml under [elevenlabs]. Favorite voices in "
+        "your ElevenLabs voice library are the ones listed here.",
+    )
+    if elevenlabs_key != str(config.elevenlabs.get("api_key", "") or ""):
+        config.elevenlabs["api_key"] = elevenlabs_key
+        config.save_config()
+    if fetch_col.button("Fetch voices", disabled=not elevenlabs_key.strip()):
+        with st.spinner("Fetching your ElevenLabs voices…"):
+            st.session_state["doc_el_voices"] = voice_service.get_elevenlabs_voices(
+                elevenlabs_key.strip()
+            )
+        if not st.session_state["doc_el_voices"]:
+            st.error(
+                "No voices returned — check the API key, and note only "
+                "voices marked as favorites in ElevenLabs are listed."
+            )
+
+    edge_voices = [
+        "en-GB-RyanNeural-Male",
+        "en-GB-ThomasNeural-Male",
+        "en-GB-SoniaNeural-Female",
+        "en-US-GuyNeural-Male",
+        "en-US-ChristopherNeural-Male",
+        "en-NG-AbeoNeural-Male",
+        "en-NG-EzinneNeural-Female",
+    ]
+    voice_options = edge_voices + st.session_state.get("doc_el_voices", [])
+    if current_voice not in voice_options:
+        voice_options.insert(0, current_voice)
+    chosen_voice = st.selectbox(
+        "Narration voice (Edge TTS voices, plus ElevenLabs after fetching)",
+        voice_options,
+        index=voice_options.index(current_voice),
+        format_func=lambda v: (
+            f"ElevenLabs · {v.split(':', 2)[2]}"
+            if v.startswith("elevenlabs:")
+            else f"Edge · {v}"
+        ),
+    )
+    if chosen_voice != current_voice:
+        config.documentary["voice_name"] = chosen_voice
+        config.save_config()
+        st.success(f"Narration voice saved: {chosen_voice}")
+
 # ---------------------------------------------------------------- new project
 with st.expander("➕ New documentary project", expanded=not store.list_projects()):
     with st.form("new_project"):
@@ -66,9 +124,15 @@ with st.expander("➕ New documentary project", expanded=not store.list_projects
             height=120,
             help="Treated as a privileged source during research.",
         )
-        col_a, col_b = st.columns(2)
+        col_a, col_b, col_c = st.columns(3)
         auto_factsheet = col_a.checkbox("Auto-approve fact sheet", value=False)
         auto_script = col_b.checkbox("Auto-approve script", value=False)
+        auto_images = col_c.checkbox(
+            "Auto-approve images",
+            value=False,
+            help="The vision model scores every candidate and the best one "
+            "is used without review; rendering follows automatically.",
+        )
         if st.form_submit_button("Create project", type="primary"):
             if not topic.strip():
                 st.error("Topic is required.")
@@ -78,6 +142,7 @@ with st.expander("➕ New documentary project", expanded=not store.list_projects
                     user_notes=user_notes,
                     auto_approve_factsheet=auto_factsheet,
                     auto_approve_script=auto_script,
+                    auto_approve_images=auto_images,
                 )
                 st.session_state["doc_selected"] = project["project_id"]
                 st.rerun()
@@ -405,15 +470,22 @@ elif status == store.STATUS_IMAGE_REVIEW:
                     with cols[cand_idx % len(cols)]:
                         if os.path.exists(candidate.get("local_path", "")):
                             st.image(candidate["local_path"])
+                        score = candidate.get("score")
+                        score_text = (
+                            f" · ⭐ {score:g}" if isinstance(score, (int, float))
+                            else ""
+                        )
                         st.caption(
                             f"{candidate['provider']} · "
-                            f"{candidate.get('license', '?')}"
+                            f"{candidate.get('license', '?')}{score_text}"
                             + (
                                 f" · [source]({candidate['page_url']})"
                                 if candidate.get("page_url")
                                 else ""
                             )
                         )
+                        if candidate.get("score_reason"):
+                            st.caption(f"_{candidate['score_reason'][:90]}_")
                 current = item.get("selected")
                 options = list(range(len(candidates)))
                 selection = st.radio(

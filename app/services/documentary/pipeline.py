@@ -51,6 +51,10 @@ def approve_factsheet(project: dict) -> dict:
 def approve_script(project: dict) -> dict:
     """Script approved (by human or auto)."""
     store.set_status(project, store.STATUS_SCRIPT_APPROVED)
+    if project.get("auto_approve_images"):
+        # Full-autopilot chain: sourcing scores candidates with the vision
+        # model and rendering follows without an image checkpoint.
+        return run_image_sourcing_stage(project)
     return project
 
 

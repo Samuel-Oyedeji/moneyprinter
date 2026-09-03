@@ -95,6 +95,7 @@ def create_project(
     language: str = "en",
     auto_approve_factsheet: bool = False,
     auto_approve_script: bool = False,
+    auto_approve_images: bool = False,
 ) -> dict:
     project_id = new_project_id(topic)
     project = {
@@ -106,6 +107,7 @@ def create_project(
         "error": "",
         "auto_approve_factsheet": bool(auto_approve_factsheet),
         "auto_approve_script": bool(auto_approve_script),
+        "auto_approve_images": bool(auto_approve_images),
         "created_at": time.time(),
         "updated_at": time.time(),
     }

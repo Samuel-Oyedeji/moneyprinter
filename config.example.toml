@@ -519,12 +519,21 @@ llm_model_name = "anthropic/claude-sonnet-5"
 # Optional path to a local transcript file used as a runtime style exemplar
 # for the scriptwriter (not shipped with the repo for copyright reasons).
 style_exemplar_path = ""
-# Narration voice for rendering (Edge TTS / azure-tts-v1 voice names work).
+# Narration voice for rendering. Edge TTS voice names work directly;
+# ElevenLabs voices use "elevenlabs:{voice_id}:{name}" (pick one in the
+# Documentary page's voice settings; requires [elevenlabs].api_key).
 voice_name = "en-GB-RyanNeural-Male"
 voice_rate = 1.0
 # Optional quiet ambient background music file, mixed under the narration.
 bgm_file = ""
 bgm_volume = 0.10
+# Vision model (via the documentary LLM provider) that views and scores
+# image candidates; the best-scoring image is preselected, and used
+# directly when a project has auto-approve images enabled.
+vision_model = "google/gemini-3.5-flash"
+# Opening title card: event name + date over the first image.
+intro_enabled = true
+intro_font = "BeVietnamPro-Bold.ttf"
 
 # =============================================================================
 # TTS Providers / 语音合成服务
