@@ -18,11 +18,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import threading
 from datetime import date as date_cls
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from loguru import logger
@@ -42,6 +43,9 @@ PRESETS = {
     "shorts": {"label": "Shorts (9:16)", "video_aspect": "9:16"},
     "horizontal": {"label": "Horizontal (16:9)", "video_aspect": "16:9"},
 }
+
+# 每天最多 6 次上传：YouTube Data API 默认配额 10000/天，一次上传消耗 1600。
+DAILY_VIDEO_LIMIT = 6
 
 _store_lock = threading.RLock()
 _run_lock = threading.Lock()
@@ -134,7 +138,7 @@ def get_entry(entry_id: str) -> Optional[dict]:
     return None
 
 
-def create_entry(
+def _build_entry(
     date: str,
     topic: str,
     video_count: int = 1,
@@ -142,13 +146,15 @@ def create_entry(
     post_time: str = "",
     language: str = "",
 ) -> dict:
+    """Validate one entry's fields and return a fresh, unsaved entry dict."""
     topic = (topic or "").strip()
     if not topic:
         raise ValueError("topic must not be empty")
     if not isinstance(video_count, int) or video_count < 1 or video_count > 20:
         raise ValueError("video_count must be an integer between 1 and 20")
 
-    entry = {
+    now = _now_iso()
+    return {
         "id": utils.get_uuid(),
         "date": _validate_date(date),
         "topic": topic,
@@ -160,15 +166,63 @@ def create_entry(
         "task_ids": [],
         "youtube_video_ids": [],
         "error": "",
-        "created_at": _now_iso(),
-        "updated_at": _now_iso(),
+        "created_at": now,
+        "updated_at": now,
     }
+
+
+def create_entry(
+    date: str,
+    topic: str,
+    video_count: int = 1,
+    preset: str = "shorts",
+    post_time: str = "",
+    language: str = "",
+) -> dict:
+    entry = _build_entry(
+        date=date,
+        topic=topic,
+        video_count=video_count,
+        preset=preset,
+        post_time=post_time,
+        language=language,
+    )
     with _store_lock:
         entries = _load_entries()
         entries.append(entry)
         _save_entries(entries)
-    logger.info(f"schedule entry created: {entry['id']} {entry['date']} {topic!r}")
+    logger.info(
+        f"schedule entry created: {entry['id']} {entry['date']} {entry['topic']!r}"
+    )
     return entry
+
+
+def create_entries(items: list[dict]) -> list[dict]:
+    """Create many entries in one atomic write.
+
+    Every item is validated before anything is persisted, so a bad row in the
+    middle of a confirmed batch leaves the calendar untouched instead of
+    half-scheduled.
+    """
+    if not items:
+        return []
+    new_entries = [
+        _build_entry(
+            date=item.get("date", ""),
+            topic=item.get("topic", ""),
+            video_count=int(item.get("video_count", 1) or 1),
+            preset=item.get("preset", "shorts"),
+            post_time=item.get("post_time", "") or "",
+            language=item.get("language", "") or "",
+        )
+        for item in items
+    ]
+    with _store_lock:
+        entries = _load_entries()
+        entries.extend(new_entries)
+        _save_entries(entries)
+    logger.info(f"schedule batch created: {len(new_entries)} entries")
+    return new_entries
 
 
 def update_entry(entry_id: str, **fields) -> dict:
@@ -248,6 +302,202 @@ def duplicate_entry(entry_id: str, dates: list[str], topic: str = "") -> list[di
             )
         )
     return created
+
+
+# ----------------------------------------------------------- batch scheduling
+# 从聊天/文档里粘贴的清单常带序号或项目符号，导入时统一剥掉。
+_LIST_MARKER_RE = re.compile(r"^\s*(?:[-*\u2022\u2013\u2014]|\d{1,3}[.)])\s+")
+
+
+def parse_topics(text: str) -> list[str]:
+    """Split pasted text into topics, one per line.
+
+    Blank lines are dropped and common list markers ("1.", "-", "*") are
+    stripped, so a list pasted straight out of a chat or a doc works as-is.
+    A number that is genuinely part of the topic ("5 AI tools that...") is
+    kept - only a marker followed by a separator is removed.
+    """
+    topics = []
+    for line in (text or "").splitlines():
+        line = _LIST_MARKER_RE.sub("", line).strip()
+        if line:
+            topics.append(line)
+    return topics
+
+
+# 发布时段只覆盖观众清醒的时间：凌晨发布的 Shorts 会在没人看的时候
+# 耗掉最关键的前几个小时推荐量。
+PUBLISH_WINDOW_START = "07:00"
+PUBLISH_WINDOW_END = "23:00"
+
+
+def _minutes_since_midnight(hhmm: str) -> int:
+    hours, _, minutes = hhmm.partition(":")
+    return int(hours) * 60 + int(minutes)
+
+
+def even_slot_times(
+    per_day: int,
+    window_start: str = PUBLISH_WINDOW_START,
+    window_end: str = PUBLISH_WINDOW_END,
+) -> list[str]:
+    """Evenly spread ``per_day`` publish times across the waking-hours window.
+
+    The window is cut into ``per_day`` equal blocks and each video lands in
+    the middle of its block, so spacing is even and the first and last slots
+    keep a half-block margin from the edges. 6 a day over 07:00-23:00 gives
+    08:20, 11:00, 13:40, 16:20, 19:00, 21:40 - no overnight uploads, and
+    nothing pinned to the very edge of the window even at low counts
+    (1 a day lands at 15:00 rather than 07:00).
+    """
+    if not isinstance(per_day, int) or per_day < 1 or per_day > DAILY_VIDEO_LIMIT:
+        raise ValueError(
+            f"per_day must be an integer between 1 and {DAILY_VIDEO_LIMIT}"
+        )
+    start = _minutes_since_midnight(window_start)
+    end = _minutes_since_midnight(window_end)
+    if not 0 <= start < end <= 24 * 60:
+        raise ValueError(
+            f"invalid publish window: {window_start!r}-{window_end!r}"
+        )
+
+    step = (end - start) / per_day
+    slots = []
+    for index in range(per_day):
+        minute = int(start + step * (index + 0.5))
+        slots.append(f"{minute // 60:02d}:{minute % 60:02d}")
+    return slots
+
+
+def _planning_now() -> datetime:
+    """Current wall-clock time in the timezone entries are published in.
+
+    Naive on purpose: it is compared against the equally naive
+    date + post_time an entry carries, the same pairing
+    :func:`_compute_publish_at` localizes at upload time.
+    """
+    tz_name = config.youtube.get("publish_timezone", "")
+    if tz_name:
+        try:
+            from zoneinfo import ZoneInfo
+
+            return datetime.now(ZoneInfo(tz_name)).replace(tzinfo=None)
+        except Exception as e:
+            logger.warning(
+                f"invalid youtube.publish_timezone {tz_name!r} ({e}), "
+                "planning against server local time"
+            )
+    return datetime.now()
+
+
+def find_free_dates(
+    count: int,
+    start_date: Optional[str] = None,
+    slot_times: Optional[list[str]] = None,
+    skip_busy_days: bool = True,
+    now: Optional[datetime] = None,
+    horizon_days: int = 730,
+) -> list[str]:
+    """Return the next ``count`` dates a batch can safely land on.
+
+    A date qualifies when it holds no calendar entries at all (unless
+    ``skip_busy_days`` is off) and every one of ``slot_times`` is still in
+    the future on that date. Partial days are skipped entirely: a slot whose
+    time has already passed would upload as a plain private draft instead of
+    publishing at the planned moment, which is not what a batch promises.
+
+    Scanning starts at ``start_date`` (default: today) and walks forward.
+    """
+    if count < 1:
+        return []
+    slot_times = slot_times or []
+    reference = now or _planning_now()
+    if start_date:
+        cursor = date_cls.fromisoformat(_validate_date(start_date))
+    else:
+        cursor = reference.date()
+
+    busy: set[str] = set()
+    if skip_busy_days:
+        busy = {
+            e.get("date", "")
+            for e in list_entries(start_date=cursor.isoformat())
+        }
+
+    slots = [datetime.strptime(t, "%H:%M").time() for t in slot_times]
+    found: list[str] = []
+    last_day = cursor + timedelta(days=horizon_days)
+    while len(found) < count and cursor <= last_day:
+        day = cursor
+        cursor += timedelta(days=1)
+        if day.isoformat() in busy:
+            continue
+        if any(datetime.combine(day, slot) <= reference for slot in slots):
+            continue
+        found.append(day.isoformat())
+
+    if len(found) < count:
+        raise ValueError(
+            f"could not find {count} free day(s) within {horizon_days} days - "
+            "the calendar is too full, pick a later start date or turn off "
+            "skipping busy days"
+        )
+    return found
+
+
+def plan_batch(
+    topics: list[str],
+    per_day: int = DAILY_VIDEO_LIMIT,
+    preset: str = "shorts",
+    language: str = "",
+    start_date: Optional[str] = None,
+    skip_busy_days: bool = True,
+    now: Optional[datetime] = None,
+) -> dict:
+    """Lay a list of topics out over the next free days, one video per slot.
+
+    Nothing is written. The caller shows the proposal for review, lets the
+    owner tweak individual rows, and passes the result to
+    :func:`create_entries` on confirmation.
+    """
+    topics = [t.strip() for t in (topics or []) if (t or "").strip()]
+    if not topics:
+        raise ValueError("no topics given")
+    if len(topics) > 500:
+        raise ValueError("too many topics in one batch (max 500)")
+    if not isinstance(per_day, int) or per_day < 1 or per_day > DAILY_VIDEO_LIMIT:
+        raise ValueError(
+            f"per_day must be an integer between 1 and {DAILY_VIDEO_LIMIT}"
+        )
+    _validate_preset(preset)
+
+    slots = even_slot_times(per_day)
+    day_count = (len(topics) + per_day - 1) // per_day
+    dates = find_free_dates(
+        day_count,
+        start_date=start_date,
+        slot_times=slots,
+        skip_busy_days=skip_busy_days,
+        now=now,
+    )
+
+    items = [
+        {
+            "date": dates[index // per_day],
+            "post_time": slots[index % per_day],
+            "topic": topic,
+            "preset": preset,
+            "video_count": 1,
+            "language": language or "",
+        }
+        for index, topic in enumerate(topics)
+    ]
+    return {
+        "items": items,
+        "dates": dates,
+        "slot_times": slots,
+        "per_day": per_day,
+    }
 
 
 def _patch_entry(entry_id: str, **fields) -> None:

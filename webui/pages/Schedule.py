@@ -9,8 +9,9 @@ import os
 import sys
 import threading
 from calendar import monthrange
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
+import pandas as pd
 import streamlit as st
 
 # 与 webui/Main.py 相同：确保项目根目录优先于第三方依赖里的同名 app 包。
@@ -183,6 +184,325 @@ with st.expander("➕ Schedule videos", expanded=False):
                 st.success(f"Scheduled {int(video_count)} video(s) on {entry_date}.")
             except ValueError as exc:
                 st.error(str(exc))
+
+# ------------------------------------------------------------ batch scheduling
+# 批量排期分两步：先生成方案（不落盘），确认后一次性写入。
+_BATCH_PLAN = "batch_plan"
+_BATCH_EDITOR = "batch_plan_editor"
+_PRESET_BY_LABEL = {label: key for key, label in _PRESET_LABELS.items()}
+
+
+def _coerce_date(value):
+    """Read a date back out of the editor, whatever pandas turned it into."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value.strip())
+        except ValueError:
+            return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return pd.Timestamp(value).date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_time(value) -> str:
+    """Read a post time back out of the editor as "HH:MM" ("" = unset)."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return ""
+        try:
+            return datetime.strptime(value, "%H:%M").strftime("%H:%M")
+        except ValueError:
+            return "invalid"
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, datetime):
+        return value.strftime("%H:%M")
+    if hasattr(value, "strftime"):
+        return value.strftime("%H:%M")
+    return "invalid"
+
+
+def _plan_frame(items: list[dict]) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "Date": date.fromisoformat(item["date"]),
+                "Time": (
+                    datetime.strptime(item["post_time"], "%H:%M").time()
+                    if item.get("post_time")
+                    else None
+                ),
+                "Topic": item["topic"],
+                "Format": _PRESET_LABELS.get(item["preset"], item["preset"]),
+                "Videos": int(item.get("video_count", 1) or 1),
+            }
+            for item in items
+        ]
+    )
+
+
+def _frame_to_items(frame: pd.DataFrame, language: str) -> tuple[list[dict], list[str]]:
+    """Turn the reviewed table back into entry payloads, collecting problems."""
+    items: list[dict] = []
+    problems: list[str] = []
+    for position, row in enumerate(frame.to_dict("records"), start=1):
+        topic = str(row.get("Topic") or "").strip()
+        row_date = _coerce_date(row.get("Date"))
+        if not topic and row_date is None:
+            continue  # 用户在动态表格里新增但没填的空行
+        if not topic:
+            problems.append(f"Row {position}: topic is empty.")
+            continue
+        if row_date is None:
+            problems.append(f"Row {position}: date is missing or invalid.")
+            continue
+        post_time = _coerce_time(row.get("Time"))
+        if post_time == "invalid":
+            problems.append(f"Row {position}: time must look like 14:30.")
+            continue
+        try:
+            video_count = int(row.get("Videos") or 1)
+        except (TypeError, ValueError):
+            problems.append(f"Row {position}: videos must be a whole number.")
+            continue
+        if video_count < 1 or video_count > 20:
+            problems.append(f"Row {position}: videos must be between 1 and 20.")
+            continue
+        preset_label = str(row.get("Format") or "")
+        preset_key = _PRESET_BY_LABEL.get(preset_label)
+        if preset_key is None:
+            problems.append(f"Row {position}: unknown format {preset_label!r}.")
+            continue
+        items.append(
+            {
+                "date": row_date.isoformat(),
+                "post_time": post_time,
+                "topic": topic,
+                "preset": preset_key,
+                "video_count": video_count,
+                "language": language,
+            }
+        )
+    return items, problems
+
+
+with st.expander(
+    "🗂 Schedule a batch — paste one topic per line",
+    expanded=bool(st.session_state.get(_BATCH_PLAN)),
+):
+    plan = st.session_state.get(_BATCH_PLAN)
+
+    if not plan:
+        st.caption(
+            f"Paste a list of topics and they are spread over the next free days "
+            f"— up to {schedule_service.DAILY_VIDEO_LIMIT} videos a day (the "
+            "YouTube upload quota), evenly spaced through waking hours "
+            f"({schedule_service.PUBLISH_WINDOW_START}–"
+            f"{schedule_service.PUBLISH_WINDOW_END}). Days that already have "
+            "entries are skipped, and you get to review everything before "
+            "anything is scheduled."
+        )
+        with st.form("batch_plan_form"):
+            batch_topics_text = st.text_area(
+                "Topics (one per line)",
+                height=180,
+                placeholder=(
+                    "Why bananas are curved\n"
+                    "The real reason planes leave trails\n"
+                    "5 AI tools that save you an hour a day"
+                ),
+                help="Numbering and bullets ('1.', '-', '*') are stripped "
+                "automatically, so you can paste a list straight from a chat.",
+            )
+            opt1, opt2, opt3 = st.columns([2, 2, 3])
+            with opt1:
+                batch_per_day = st.number_input(
+                    "Videos per day",
+                    min_value=1,
+                    max_value=schedule_service.DAILY_VIDEO_LIMIT,
+                    value=schedule_service.DAILY_VIDEO_LIMIT,
+                    help=f"The {schedule_service.PUBLISH_WINDOW_START}–"
+                    f"{schedule_service.PUBLISH_WINDOW_END} window is split "
+                    "into this many equal blocks, one video in the middle of "
+                    "each. YouTube's default API quota allows about "
+                    f"{schedule_service.DAILY_VIDEO_LIMIT} uploads a day.",
+                )
+                batch_skip_busy = st.toggle(
+                    "Skip days that already have entries",
+                    value=True,
+                    help="On: the batch starts on the first completely free "
+                    "day. Off: it starts on the first day regardless, stacking "
+                    "on top of what is already scheduled.",
+                )
+            with opt2:
+                batch_preset = st.selectbox(
+                    "Format preset",
+                    options=list(_PRESET_LABELS),
+                    format_func=lambda key: _PRESET_LABELS[key],
+                    key="batch_preset",
+                )
+                batch_start = st.date_input(
+                    "Start from (optional)",
+                    value=None,
+                    min_value=date.today(),
+                    help="Leave empty to start from the first free day.",
+                )
+            with opt3:
+                batch_language = st.text_input(
+                    "Script language (optional, e.g. en-US)",
+                    value=config.ui.get("video_language", ""),
+                    key="batch_language",
+                )
+                st.caption(
+                    "Every row is created as a separate calendar entry, so you "
+                    "can still edit or delete them individually afterwards."
+                )
+            planned = st.form_submit_button("Preview schedule", type="primary")
+
+        if planned:
+            topics = schedule_service.parse_topics(batch_topics_text)
+            if not topics:
+                st.error("Paste at least one topic.")
+            else:
+                try:
+                    result = schedule_service.plan_batch(
+                        topics=topics,
+                        per_day=int(batch_per_day),
+                        preset=batch_preset,
+                        language=batch_language.strip(),
+                        start_date=(
+                            batch_start.isoformat() if batch_start else None
+                        ),
+                        skip_busy_days=batch_skip_busy,
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.session_state[_BATCH_PLAN] = result
+                    st.session_state.pop(_BATCH_EDITOR, None)
+                    st.rerun()
+    else:
+        items = plan["items"]
+        language = items[0].get("language", "") if items else ""
+        first_day = date.fromisoformat(plan["dates"][0])
+        last_day = date.fromisoformat(plan["dates"][-1])
+        st.markdown(
+            f"**Review {len(items)} video(s) across {len(plan['dates'])} day(s)** — "
+            f"{first_day.strftime('%a, %b %-d')} to {last_day.strftime('%a, %b %-d, %Y')}. "
+            "Adjust any row below, then confirm. Nothing is scheduled yet."
+        )
+        edited = st.data_editor(
+            _plan_frame(items),
+            key=_BATCH_EDITOR,
+            hide_index=True,
+            use_container_width=True,
+            num_rows="dynamic",
+            column_config={
+                "Date": st.column_config.DateColumn(
+                    "Date", format="YYYY-MM-DD", required=True
+                ),
+                "Time": st.column_config.TimeColumn(
+                    "Post time", format="HH:mm", step=300
+                ),
+                "Topic": st.column_config.TextColumn(
+                    "Topic", width="large", required=True, max_chars=500
+                ),
+                "Format": st.column_config.SelectboxColumn(
+                    "Format", options=list(_PRESET_LABELS.values()), required=True
+                ),
+                "Videos": st.column_config.NumberColumn(
+                    "Videos", min_value=1, max_value=20, step=1, format="%d"
+                ),
+            },
+        )
+
+        confirm_items, problems = _frame_to_items(edited, language)
+
+        # 生成后再校验一次：用户可能把两行改到同一天，或把时间调到过去。
+        per_day_totals: dict[str, int] = {}
+        for item in confirm_items:
+            per_day_totals[item["date"]] = (
+                per_day_totals.get(item["date"], 0) + item["video_count"]
+            )
+        overloaded = {
+            day: total
+            for day, total in per_day_totals.items()
+            if total > schedule_service.DAILY_VIDEO_LIMIT
+        }
+        now_local = schedule_service._planning_now()
+        past_rows = sum(
+            1
+            for item in confirm_items
+            if item["post_time"]
+            and datetime.strptime(
+                f"{item['date']} {item['post_time']}", "%Y-%m-%d %H:%M"
+            )
+            <= now_local
+        )
+
+        for problem in problems:
+            st.error(problem)
+        if overloaded:
+            st.warning(
+                "Over the YouTube upload quota on: "
+                + ", ".join(f"{day} ({total} videos)" for day, total in
+                            sorted(overloaded.items()))
+                + f". Uploads past ~{schedule_service.DAILY_VIDEO_LIMIT} a day "
+                "will fail until the quota resets."
+            )
+        if past_rows:
+            st.warning(
+                f"{past_rows} row(s) have a post time in the past — those videos "
+                "will be uploaded as private drafts instead of auto-publishing."
+            )
+        if not problems and confirm_items:
+            total_videos = sum(item["video_count"] for item in confirm_items)
+            st.caption(
+                f"Ready to schedule {total_videos} video(s) over "
+                f"{len(per_day_totals)} day(s)."
+            )
+
+        confirm_col, discard_col, _ = st.columns([2, 1, 3])
+        with confirm_col:
+            if st.button(
+                f"✅ Confirm all — schedule {len(confirm_items)} entr"
+                f"{'y' if len(confirm_items) == 1 else 'ies'}",
+                type="primary",
+                use_container_width=True,
+                disabled=bool(problems) or not confirm_items,
+            ):
+                try:
+                    created = schedule_service.create_entries(confirm_items)
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.session_state.pop(_BATCH_PLAN, None)
+                    st.session_state.pop(_BATCH_EDITOR, None)
+                    st.success(f"Scheduled {len(created)} entries.")
+                    st.rerun()
+        with discard_col:
+            if st.button("Discard", use_container_width=True):
+                st.session_state.pop(_BATCH_PLAN, None)
+                st.session_state.pop(_BATCH_EDITOR, None)
+                st.rerun()
 
 # ------------------------------------------------------------- month calendar
 if "calendar_month" not in st.session_state:

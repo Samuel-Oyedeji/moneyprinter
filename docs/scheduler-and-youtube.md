@@ -31,6 +31,9 @@ Discord alert with a YouTube Studio link → you review & publish
   generation settings (voice, subtitles, BGM, video source…) are inherited
   from the last settings you saved in the WebUI.
 - Entries can be **duplicated across dates** with just the topic changed.
+- A **batch** of pasted topics is spread over the next free days, six a day
+  in evenly spaced 07:00–23:00 slots, with a review step before anything is
+  saved.
 - Missed days are caught up: any entry still `pending` from an earlier date
   runs on the next cron hit.
 
@@ -113,6 +116,40 @@ Open the WebUI — there is now a **Schedule** page in the sidebar:
   new topic — your "same preset, different day" workflow).
 - **Run due entries now** triggers a run manually without waiting for cron.
 
+### Scheduling a batch of topics
+
+**🗂 Schedule a batch** takes a whole list at once — paste one topic per
+line (numbering and bullets are stripped, so a list copied straight out of
+a chat works) and it lays them out for you:
+
+- **6 videos per day** by default. That is the YouTube quota ceiling, not a
+  style choice: the default 10,000 daily API units divided by 1,600 per
+  upload is about six. Lower it in the form if you want a slower cadence.
+- **Starts on the first completely free day.** Days that already hold any
+  entry are skipped, so a batch never stacks on top of what you planned
+  earlier — paste on the 3rd with the 4th and 5th already booked and it
+  starts on the 6th. Turn the toggle off to stack anyway, or set an
+  explicit start date.
+- **Times are spread evenly through waking hours, 07:00–23:00.** The
+  window is cut into equal blocks and each video lands in the middle of
+  one, so six a day means 08:20, 11:00, 13:40, 16:20, 19:00, 21:40 — even
+  spacing, no overnight uploads burning a Short's critical first hours
+  while the audience is asleep, and nothing pinned to the very edge of the
+  window at lower counts (one a day lands at 15:00). The window lives in
+  `PUBLISH_WINDOW_START` / `PUBLISH_WINDOW_END` in
+  `app/services/schedule.py`. A day is only used if *all* of its slots are
+  still in the future, so a batch never lands on a time that has already
+  passed (which would upload a plain draft instead of publishing at the
+  planned moment).
+- **Nothing is scheduled until you confirm.** The preview is an editable
+  table: change a date, nudge a time, retitle a topic, bump a row's video
+  count, add or delete rows. It warns about days that go over the upload
+  quota and about times in the past. **Confirm all** writes every row in one
+  atomic operation — if any row is invalid, nothing is written at all.
+
+Each row becomes an ordinary calendar entry afterwards, so it can be
+edited, duplicated, retried or deleted individually like any other.
+
 Everything is also available as REST endpoints (all under the same
 `x-api-key` auth as the rest of the API):
 
@@ -123,6 +160,8 @@ Everything is also available as REST endpoints (all under the same
 | PUT | `/api/v1/schedules/{id}` | update entry (set `status: pending` to retry) |
 | DELETE | `/api/v1/schedules/{id}` | delete entry |
 | POST | `/api/v1/schedules/{id}/duplicate` | copy onto other dates |
+| POST | `/api/v1/schedules/batch/plan` | lay topics out over free days (saves nothing) |
+| POST | `/api/v1/schedules/batch` | create a reviewed batch in one write |
 | POST | `/api/v1/schedules/run` | run everything due (the cron hook) |
 
 Schedule data lives in `storage/schedule/schedule.json`.

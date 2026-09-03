@@ -568,6 +568,45 @@ class ScheduleDuplicateRequest(BaseModel):
     topic: str = Field(default="", max_length=500)
 
 
+class ScheduleBatchItem(BaseModel):
+    """One reviewed row of a batch plan, ready to be scheduled."""
+
+    date: str = Field(..., description="Scheduled generation date, YYYY-MM-DD")
+    topic: str = Field(..., min_length=1, max_length=500)
+    post_time: str = Field(default="", description="Publish time HH:MM")
+    video_count: int = Field(default=1, ge=1, le=20)
+    preset: str = Field(default="shorts", description="shorts | horizontal")
+    language: str = Field(default="", description="Script language, empty = auto")
+
+
+class ScheduleBatchPlanRequest(BaseModel):
+    """Propose a calendar layout for many topics; nothing is persisted."""
+
+    topics: List[str] = Field(
+        default_factory=list, max_length=500, description="One topic per item"
+    )
+    topics_text: str = Field(
+        default="", description="Alternative to topics: one topic per line"
+    )
+    per_day: int = Field(
+        default=6, ge=1, le=6, description="Videos per day (YouTube quota caps at 6)"
+    )
+    preset: str = Field(default="shorts", description="shorts | horizontal")
+    language: str = Field(default="", description="Script language, empty = auto")
+    start_date: Optional[str] = Field(
+        default=None, description="Earliest date to consider, YYYY-MM-DD"
+    )
+    skip_busy_days: bool = Field(
+        default=True, description="Skip dates that already hold entries"
+    )
+
+
+class ScheduleBatchCreateRequest(BaseModel):
+    """Persist a reviewed batch plan in one shot."""
+
+    items: List[ScheduleBatchItem] = Field(..., min_length=1, max_length=500)
+
+
 class ScheduleRunRequest(BaseModel):
     date: Optional[str] = Field(
         default=None, description="Run as if today were this date (YYYY-MM-DD)"

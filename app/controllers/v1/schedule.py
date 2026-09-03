@@ -13,6 +13,8 @@ from app.controllers import base
 from app.controllers.v1.base import new_router
 from app.models.exception import HttpException
 from app.models.schema import (
+    ScheduleBatchCreateRequest,
+    ScheduleBatchPlanRequest,
     ScheduleDuplicateRequest,
     ScheduleEntryRequest,
     ScheduleEntryResponse,
@@ -132,6 +134,48 @@ def duplicate_schedule(
     except KeyError:
         raise HttpException(
             task_id=request_id, status_code=404, message=f"{request_id}: entry not found"
+        )
+    except ValueError as e:
+        raise HttpException(
+            task_id=request_id, status_code=400, message=f"{request_id}: {str(e)}"
+        )
+    return utils.get_response(200, {"entries": created})
+
+
+@router.post(
+    "/schedules/batch/plan",
+    response_model=ScheduleListResponse,
+    summary="Preview how a list of topics would be laid out (nothing is saved)",
+)
+def plan_schedule_batch(request: Request, body: ScheduleBatchPlanRequest):
+    request_id = base.get_task_id(request)
+    topics = list(body.topics) + schedule_service.parse_topics(body.topics_text)
+    try:
+        plan = schedule_service.plan_batch(
+            topics=topics,
+            per_day=body.per_day,
+            preset=body.preset,
+            language=body.language,
+            start_date=body.start_date,
+            skip_busy_days=body.skip_busy_days,
+        )
+    except ValueError as e:
+        raise HttpException(
+            task_id=request_id, status_code=400, message=f"{request_id}: {str(e)}"
+        )
+    return utils.get_response(200, plan)
+
+
+@router.post(
+    "/schedules/batch",
+    response_model=ScheduleListResponse,
+    summary="Schedule a reviewed batch of entries in one atomic write",
+)
+def create_schedule_batch(request: Request, body: ScheduleBatchCreateRequest):
+    request_id = base.get_task_id(request)
+    try:
+        created = schedule_service.create_entries(
+            [item.model_dump() for item in body.items]
         )
     except ValueError as e:
         raise HttpException(
