@@ -23,7 +23,17 @@ from app.services.documentary import llm_bridge, store
 
 TARGET_WORDS_MIN = 1400
 TARGET_WORDS_MAX = 1800
+NARRATION_WORDS_PER_MINUTE = 150
 MAX_EXEMPLAR_CHARS = 12000
+
+
+def _target_words(project: dict) -> tuple[int, int]:
+    """Word budget from the project's target length (default ~10-12 min)."""
+    minutes = float(project.get("target_minutes") or 0.0)
+    if minutes <= 0:
+        return TARGET_WORDS_MIN, TARGET_WORDS_MAX
+    center = minutes * NARRATION_WORDS_PER_MINUTE
+    return int(center * 0.9), int(center * 1.1)
 
 STYLE_SPEC = """
 ## Narrative voice and style (follow strictly)
@@ -106,6 +116,7 @@ def _compact_factsheet(factsheet: dict) -> str:
 
 
 def _script_prompt(project: dict, factsheet: dict) -> str:
+    words_min, words_max = _target_words(project)
     return f"""
 # Role: Documentary Scriptwriter
 
@@ -126,8 +137,10 @@ real victims: factual discipline and a respectful tone are non-negotiable.
 4. Each paragraph lists the fact ids it draws on in "fact_ids".
 
 ## Length
-{TARGET_WORDS_MIN}-{TARGET_WORDS_MAX} words of narration in total.
-Paragraphs of 3-6 sentences; each paragraph is one visual beat.
+{words_min}-{words_max} words of narration in total.
+Paragraphs of 3-6 sentences; each paragraph is one visual beat. For short
+films, compress the structure (fewer paragraphs per section) rather than
+writing shorter paragraphs.
 
 ## Image cues
 For every paragraph, write "image_cue": a concrete stock/archive photo search
@@ -164,7 +177,7 @@ Respond ONLY with a single valid JSON object, no markdown fences:
 """.strip()
 
 
-def _validate_script(script: dict) -> tuple[int, list[str]]:
+def _validate_script(script: dict, words_min: int = TARGET_WORDS_MIN) -> tuple[int, list[str]]:
     problems = []
     sections = script.get("sections")
     if not isinstance(sections, list) or not sections:
@@ -185,7 +198,7 @@ def _validate_script(script: dict) -> tuple[int, list[str]]:
             if not str(paragraph.get("image_cue", "")).strip():
                 problems.append(f"missing image_cue for: {text[:50]}...")
 
-    if word_count < TARGET_WORDS_MIN * 0.7:
+    if word_count < words_min * 0.7:
         problems.append(f"script too short: {word_count} words")
     return word_count, problems
 
@@ -204,11 +217,12 @@ def full_narration_text(script: dict) -> str:
 def run_scriptwriting(project: dict, factsheet: dict) -> dict:
     """Generate the script from the (reviewed) fact sheet and persist it."""
     project_id = project["project_id"]
+    words_min, _ = _target_words(project)
     script = llm_bridge.generate_json(_script_prompt(project, factsheet))
     if not isinstance(script, dict):
         raise RuntimeError("script generation returned a non-object response")
 
-    word_count, problems = _validate_script(script)
+    word_count, problems = _validate_script(script, words_min)
     if problems:
         # One corrective retry with the problems spelled out; models fix
         # structural misses reliably when told exactly what was wrong.
@@ -220,7 +234,7 @@ def run_scriptwriting(project: dict, factsheet: dict) -> dict:
             + "\n- ".join(problems)
         )
         script = llm_bridge.generate_json(retry_prompt)
-        word_count, problems = _validate_script(script)
+        word_count, problems = _validate_script(script, words_min)
         if problems:
             raise RuntimeError(f"script failed validation: {problems}")
 

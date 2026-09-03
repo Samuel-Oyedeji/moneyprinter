@@ -124,6 +124,13 @@ with st.expander("➕ New documentary project", expanded=not store.list_projects
             height=120,
             help="Treated as a privileged source during research.",
         )
+        target_minutes = st.slider(
+            "Target length (minutes of narration)",
+            min_value=3.0,
+            max_value=20.0,
+            value=10.0,
+            step=0.5,
+        )
         col_a, col_b, col_c = st.columns(3)
         auto_factsheet = col_a.checkbox("Auto-approve fact sheet", value=False)
         auto_script = col_b.checkbox("Auto-approve script", value=False)
@@ -143,6 +150,7 @@ with st.expander("➕ New documentary project", expanded=not store.list_projects
                     auto_approve_factsheet=auto_factsheet,
                     auto_approve_script=auto_script,
                     auto_approve_images=auto_images,
+                    target_minutes=target_minutes,
                 )
                 st.session_state["doc_selected"] = project["project_id"]
                 st.rerun()

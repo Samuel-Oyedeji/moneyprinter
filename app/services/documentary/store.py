@@ -96,6 +96,7 @@ def create_project(
     auto_approve_factsheet: bool = False,
     auto_approve_script: bool = False,
     auto_approve_images: bool = False,
+    target_minutes: float = 0.0,
 ) -> dict:
     project_id = new_project_id(topic)
     project = {
@@ -108,6 +109,7 @@ def create_project(
         "auto_approve_factsheet": bool(auto_approve_factsheet),
         "auto_approve_script": bool(auto_approve_script),
         "auto_approve_images": bool(auto_approve_images),
+        "target_minutes": float(target_minutes or 0.0),
         "created_at": time.time(),
         "updated_at": time.time(),
     }
