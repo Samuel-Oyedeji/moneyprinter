@@ -750,7 +750,18 @@ def _run_entry(entry: dict) -> None:
         return
 
     script = (result or {}).get("script", "")
-    upload_result = _upload_entry_videos(entry, videos, script)
+    try:
+        upload_result = _upload_entry_videos(entry, videos, script)
+    except Exception as e:
+        # 上传阶段崩溃过去会让条目永远停在 generating（视频已生成，
+        # 任务管理器显示 completed，但日历不动，也没有告警）。
+        logger.exception(f"schedule entry {entry_id} failed while uploading: {str(e)}")
+        error = f"upload failed: {type(e).__name__}: {str(e)}"
+        _patch_entry(entry_id, status=STATUS_FAILED, error=error)
+        discord_notify.discord_notify_service.notify_failure(
+            entry["date"], entry["topic"], error
+        )
+        return
     video_ids = upload_result["video_ids"]
     errors = upload_result["errors"]
 
@@ -771,6 +782,70 @@ def _run_entry(entry: dict) -> None:
         )
 
 
+# 一个条目正常只会在 generating 停留一次生成+上传的时间。超过这个上限
+# 说明进程在中途死掉了（重启、OOM、未捕获异常），条目需要被解锁，
+# 否则它既跑不动也删不掉。
+STALE_GENERATING_HOURS = 3
+
+
+def _generating_age_hours(entry: dict) -> Optional[float]:
+    """How long an entry has been sitting in ``generating``, in hours."""
+    if entry.get("status") != STATUS_GENERATING:
+        return None
+    try:
+        updated = datetime.fromisoformat(entry.get("updated_at", ""))
+    except ValueError:
+        return None
+    if updated.tzinfo is None:
+        updated = updated.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - updated).total_seconds() / 3600
+
+
+def is_stale_generating(entry: dict) -> bool:
+    age = _generating_age_hours(entry)
+    return age is not None and age >= STALE_GENERATING_HOURS
+
+
+def recover_stale_entries() -> list[str]:
+    """Mark long-stuck ``generating`` entries as failed so they can be retried."""
+    recovered = []
+    for entry in list_entries():
+        if not is_stale_generating(entry):
+            continue
+        age = _generating_age_hours(entry) or 0
+        logger.warning(
+            f"schedule entry {entry['id']} stuck in generating for "
+            f"{age:.1f}h, marking failed so it can be retried"
+        )
+        _patch_entry(
+            entry["id"],
+            status=STATUS_FAILED,
+            error=(
+                f"stuck in generating for {age:.1f}h - the run was interrupted "
+                "(process restart or an unhandled error during upload). "
+                "Check the logs, then retry."
+            ),
+        )
+        recovered.append(entry["id"])
+    return recovered
+
+
+def reset_entry(entry_id: str) -> dict:
+    """Force a stuck ``generating`` entry back to pending (manual unstick)."""
+    with _store_lock:
+        entries = _load_entries()
+        for entry in entries:
+            if entry.get("id") != entry_id:
+                continue
+            entry["status"] = STATUS_PENDING
+            entry["error"] = ""
+            entry["updated_at"] = _now_iso()
+            _save_entries(entries)
+            logger.info(f"schedule entry reset to pending: {entry_id}")
+            return entry
+    raise KeyError(f"schedule entry not found: {entry_id}")
+
+
 def run_due_entries(run_date: Optional[str] = None) -> dict:
     """Generate and upload every pending entry due on or before ``run_date``.
 
@@ -788,6 +863,7 @@ def run_due_entries(run_date: Optional[str] = None) -> dict:
         # WebUI 和 API 是两个进程：用户保存的设置只写入磁盘。这里先重新载入，
         # 保证排期生成使用的是用户在界面上最后保存的配置。
         config.reload_config()
+        recovered = recover_stale_entries()
         due = [
             e
             for e in list_entries(end_date=run_date)
@@ -795,8 +871,18 @@ def run_due_entries(run_date: Optional[str] = None) -> dict:
         ]
         logger.info(f"schedule run for {run_date}: {len(due)} due entries")
         for entry in due:
-            _run_entry(entry)
-        return {"ran": len(due), "date": run_date}
+            try:
+                _run_entry(entry)
+            except Exception as e:
+                # 单个条目出问题不应中断整次运行：否则同一天剩下的条目
+                # 会被静默跳过，直到下一次 cron。
+                logger.exception(f"schedule entry {entry['id']} aborted: {str(e)}")
+                _patch_entry(
+                    entry["id"],
+                    status=STATUS_FAILED,
+                    error=f"{type(e).__name__}: {str(e)}",
+                )
+        return {"ran": len(due), "date": run_date, "recovered": recovered}
     finally:
         _run_lock.release()
 

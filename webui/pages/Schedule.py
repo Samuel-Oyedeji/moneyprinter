@@ -652,6 +652,10 @@ for entry_date_str in dates_in_order:
                     actions = ["copy"]
                     if status == schedule_service.STATUS_FAILED:
                         actions.insert(0, "retry")
+                    # 生成中的条目正常不可改；但进程中途死掉会让它永远卡住，
+                    # 所以始终留一个手动解锁的出口。
+                    if status == schedule_service.STATUS_GENERATING:
+                        actions.insert(0, "unstick")
                     if status != schedule_service.STATUS_GENERATING:
                         actions.append("delete")
                     # 每个卡片最多三个操作，两列自适应；奇数个时最后一个占整行。
@@ -662,6 +666,20 @@ for entry_date_str in dates_in_order:
                             return st.container()
                         return button_row[index % len(button_row)]
 
+                    if "unstick" in actions:
+                        with _slot(actions.index("unstick")):
+                            if st.button(
+                                "♻️ Reset", key=f"reset_{entry['id']}",
+                                use_container_width=True,
+                                help=(
+                                    "Stuck in generating? The run was interrupted. "
+                                    "Reset it to pending so the next run picks it "
+                                    "up again. If it really is still rendering, "
+                                    "resetting makes it regenerate from scratch."
+                                ),
+                            ):
+                                schedule_service.reset_entry(entry["id"])
+                                st.rerun()
                     if "retry" in actions:
                         with _slot(actions.index("retry")):
                             if st.button(

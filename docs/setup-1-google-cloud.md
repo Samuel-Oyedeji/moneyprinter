@@ -55,15 +55,20 @@ user, so the minimal setup is fine.
    - Under **Test users**, click **+ ADD USERS**.
    - Enter the Gmail address of the account that owns your YouTube channel.
    - Click **SAVE**.
-4. Leave **Publishing status** as **Testing**. Do not click "Publish app" —
-   testing mode is exactly what you want for personal use. (Publishing
-   triggers Google's verification review, which you don't need.)
+4. Set **Publishing status** to **In production** (**Publish app** →
+   confirm). This matters: **while the app stays in "Testing", the refresh
+   token expires after exactly 7 days** and every upload after that fails
+   with `invalid_grant: Token has been expired or revoked`. Publishing does
+   not force you through Google's verification review — an unverified app
+   using a sensitive scope just shows an "unverified app" warning on the
+   consent screen (click **Advanced → Go to … (unsafe)**) and is capped at
+   100 users, which is irrelevant for a personal channel. Its refresh
+   tokens do not expire on a timer.
 
-> Note: Google's docs say testing-mode refresh tokens can expire after
-> 7 days — that limit applies to certain sensitive scopes/web flows and in
-> practice desktop-app tokens for YouTube upload keep working. If your
-> uploads ever start failing with an auth error, just re-run
-> `python youtube_auth.py` (step 2 doc) to mint a fresh token.
+> If you leave the app in Testing anyway, put a weekly reminder in your
+> calendar to re-run `python youtube_auth.py` (step 2 doc) and re-copy
+> `token.json` to the server — otherwise scheduled uploads stop silently
+> after a week.
 
 ## 4. Create the OAuth client (Desktop app)
 

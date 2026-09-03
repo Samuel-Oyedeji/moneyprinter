@@ -159,6 +159,7 @@ class YoutubeUploadService:
         ``publish_at`` (ISO 8601 UTC) makes YouTube auto-publish the private
         video at that moment; leave unset for the manual review workflow.
         """
+        from google.auth.exceptions import RefreshError
         from googleapiclient.errors import HttpError
         from googleapiclient.http import MediaFileUpload
 
@@ -231,9 +232,21 @@ class YoutubeUploadService:
             error = f"YouTube API error: {e.status_code} {e.reason}"
             logger.error(error)
             return {"success": False, "error": error}
-        except (YoutubeUploadError, OSError, ValueError) as e:
-            logger.error(f"YouTube upload failed: {str(e)}")
-            return {"success": False, "error": str(e)}
+        except RefreshError as e:
+            # 刷新令牌失效（最常见：OAuth 应用停留在 "Testing" 状态，
+            # 刷新令牌 7 天后过期），必须重新授权，不能靠重试恢复。
+            error = (
+                f"YouTube authorization expired ({str(e)}). Run "
+                "`python youtube_auth.py` again and copy the new "
+                f"{self.token_file} to this machine."
+            )
+            logger.error(error)
+            return {"success": False, "error": error}
+        except Exception as e:
+            # 上传失败绝不能向上抛：调用方（排期 runner）会因此把整次运行
+            # 中断，条目永远停在 generating 状态。
+            logger.exception(f"YouTube upload failed: {str(e)}")
+            return {"success": False, "error": f"{type(e).__name__}: {str(e)}"}
 
     def _set_thumbnail(self, client, video_id: str, thumbnail_path: str) -> None:
         from googleapiclient.errors import HttpError

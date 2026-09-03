@@ -48,8 +48,9 @@ everyone until you publish it from YouTube Studio.
 2. **APIs & Services → Library** → enable **YouTube Data API v3**.
 3. **APIs & Services → OAuth consent screen** → External → fill in the app
    name/email → add your own Google account under **Test users**.
-   (Staying in "Testing" mode is fine for personal use; tokens work
-   indefinitely once issued to a test user via the flow below.)
+   Then set **Publishing status** to **In production**: refresh tokens
+   issued while the app is in "Testing" expire after 7 days, which silently
+   breaks scheduled uploads a week after you authorize.
 4. **APIs & Services → Credentials → Create credentials → OAuth client ID**
    → type **Desktop app** → download the JSON.
 5. Save it as `storage/youtube/client_secret.json`.
