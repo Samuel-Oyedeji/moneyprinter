@@ -177,7 +177,11 @@ Respond ONLY with a single valid JSON object, no markdown fences:
 """.strip()
 
 
-def _validate_script(script: dict, words_min: int = TARGET_WORDS_MIN) -> tuple[int, list[str]]:
+def _validate_script(
+    script: dict,
+    words_min: int = TARGET_WORDS_MIN,
+    words_max: int = TARGET_WORDS_MAX,
+) -> tuple[int, list[str]]:
     problems = []
     sections = script.get("sections")
     if not isinstance(sections, list) or not sections:
@@ -200,6 +204,11 @@ def _validate_script(script: dict, words_min: int = TARGET_WORDS_MIN) -> tuple[i
 
     if word_count < words_min * 0.7:
         problems.append(f"script too short: {word_count} words")
+    if word_count > words_max * 1.2:
+        problems.append(
+            f"script too long: {word_count} words (target at most {words_max}); "
+            "cut whole paragraphs, do not compress sentences"
+        )
     return word_count, problems
 
 
@@ -217,12 +226,12 @@ def full_narration_text(script: dict) -> str:
 def run_scriptwriting(project: dict, factsheet: dict) -> dict:
     """Generate the script from the (reviewed) fact sheet and persist it."""
     project_id = project["project_id"]
-    words_min, _ = _target_words(project)
+    words_min, words_max = _target_words(project)
     script = llm_bridge.generate_json(_script_prompt(project, factsheet))
     if not isinstance(script, dict):
         raise RuntimeError("script generation returned a non-object response")
 
-    word_count, problems = _validate_script(script, words_min)
+    word_count, problems = _validate_script(script, words_min, words_max)
     if problems:
         # One corrective retry with the problems spelled out; models fix
         # structural misses reliably when told exactly what was wrong.
@@ -234,7 +243,7 @@ def run_scriptwriting(project: dict, factsheet: dict) -> dict:
             + "\n- ".join(problems)
         )
         script = llm_bridge.generate_json(retry_prompt)
-        word_count, problems = _validate_script(script, words_min)
+        word_count, problems = _validate_script(script, words_min, words_max)
         if problems:
             raise RuntimeError(f"script failed validation: {problems}")
 
