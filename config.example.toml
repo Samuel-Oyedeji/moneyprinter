@@ -508,6 +508,18 @@ contains_synthetic_media = false
 # Channel settings > Integrations > Webhooks > New Webhook > Copy URL
 webhook_url = ""
 
+[documentary]
+# Long-form documentary pipeline (still images + narration).
+# SerpApi key for the web research stage: https://serpapi.com/manage-api-key
+serpapi_api_key = ""
+# LLM override for research and scriptwriting. These stages need a strong
+# model; leave llm_provider empty to fall back to the global [app] provider.
+llm_provider = "openrouter"
+llm_model_name = "anthropic/claude-sonnet-5"
+# Optional path to a local transcript file used as a runtime style exemplar
+# for the scriptwriter (not shipped with the repo for copyright reasons).
+style_exemplar_path = ""
+
 # =============================================================================
 # TTS Providers / 语音合成服务
 # =============================================================================
