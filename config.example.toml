@@ -519,6 +519,12 @@ llm_model_name = "anthropic/claude-sonnet-5"
 # Optional path to a local transcript file used as a runtime style exemplar
 # for the scriptwriter (not shipped with the repo for copyright reasons).
 style_exemplar_path = ""
+# Narration voice for rendering (Edge TTS / azure-tts-v1 voice names work).
+voice_name = "en-GB-RyanNeural-Male"
+voice_rate = 1.0
+# Optional quiet ambient background music file, mixed under the narration.
+bgm_file = ""
+bgm_volume = 0.10
 
 # =============================================================================
 # TTS Providers / 语音合成服务

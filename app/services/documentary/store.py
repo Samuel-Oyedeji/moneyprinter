@@ -28,6 +28,10 @@ STATUS_FACTSHEET_REVIEW = "factsheet_review"
 STATUS_SCRIPTING = "scripting"
 STATUS_SCRIPT_REVIEW = "script_review"
 STATUS_SCRIPT_APPROVED = "script_approved"
+STATUS_SOURCING_IMAGES = "sourcing_images"
+STATUS_IMAGE_REVIEW = "image_review"
+STATUS_RENDERING = "rendering"
+STATUS_DONE = "done"
 STATUS_FAILED = "failed"
 
 _write_lock = threading.RLock()
@@ -163,3 +167,29 @@ def save_script(project_id: str, script: dict) -> None:
 
 def load_script(project_id: str) -> dict | None:
     return _read_json(_json_path(project_id, "script"))
+
+
+def save_images(project_id: str, images: dict) -> None:
+    _write_json(_json_path(project_id, "images"), images)
+
+
+def load_images(project_id: str) -> dict | None:
+    return _read_json(_json_path(project_id, "images"))
+
+
+def images_dir(project_id: str) -> str:
+    d = os.path.join(project_dir(project_id), "images")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def audio_dir(project_id: str) -> str:
+    d = os.path.join(project_dir(project_id), "audio")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def render_dir(project_id: str) -> str:
+    d = os.path.join(project_dir(project_id), "render")
+    os.makedirs(d, exist_ok=True)
+    return d

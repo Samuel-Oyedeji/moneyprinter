@@ -2,14 +2,13 @@
 
 Owns status transitions and the human-review gates. Each gate checks the
 project's auto_approve flag, so removing a checkpoint later means flipping a
-flag — no flow changes. Phase 1 covers research → fact sheet review →
-script → script review; image sourcing and rendering attach after
-STATUS_SCRIPT_APPROVED in phase 2.
+flag — no flow changes. Full flow: research → fact sheet review → script →
+script review → image sourcing → image review → render → done.
 """
 
 from loguru import logger
 
-from app.services.documentary import research, scriptwriter, store
+from app.services.documentary import images, render, research, scriptwriter, store
 
 
 def run_research_stage(project: dict) -> dict:
@@ -50,8 +49,37 @@ def approve_factsheet(project: dict) -> dict:
 
 
 def approve_script(project: dict) -> dict:
-    """Script approved. Phase 2 (image sourcing) will continue from here."""
+    """Script approved (by human or auto)."""
     store.set_status(project, store.STATUS_SCRIPT_APPROVED)
+    return project
+
+
+def run_image_sourcing_stage(project: dict) -> dict:
+    """Source candidate images for every cue; ends in image_review."""
+    store.set_status(project, store.STATUS_SOURCING_IMAGES)
+    try:
+        images.run_image_sourcing(project)
+    except Exception as exc:
+        logger.exception(f"image sourcing failed for {project['project_id']}")
+        store.set_status(project, store.STATUS_FAILED, error=str(exc))
+        raise
+
+    if project.get("auto_approve_images"):
+        return approve_images(project)
+    store.set_status(project, store.STATUS_IMAGE_REVIEW)
+    return project
+
+
+def approve_images(project: dict) -> dict:
+    """Image selection approved: render the final video."""
+    store.set_status(project, store.STATUS_RENDERING)
+    try:
+        render.run_render(project)
+    except Exception as exc:
+        logger.exception(f"render failed for {project['project_id']}")
+        store.set_status(project, store.STATUS_FAILED, error=str(exc))
+        raise
+    store.set_status(project, store.STATUS_DONE)
     return project
 
 
@@ -62,4 +90,6 @@ def retry_failed(project: dict) -> dict:
         return run_research_stage(project)
     if store.load_script(project_id) is None:
         return approve_factsheet(project)
-    return approve_script(project)
+    if store.load_images(project_id) is None:
+        return run_image_sourcing_stage(project)
+    return approve_images(project)
