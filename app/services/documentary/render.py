@@ -20,6 +20,7 @@ from loguru import logger
 
 from app.config import config
 from app.services import voice
+from app.services.documentary import costs
 from app.services.documentary import images as images_service
 from app.services.documentary import scriptwriter, store
 from app.utils import utils
@@ -68,16 +69,17 @@ def synthesize_paragraphs(project_id: str, paragraphs: list[dict]) -> None:
     voice_name, voice_rate = _voice_settings()
     audio_dir = store.audio_dir(project_id)
     for paragraph in paragraphs:
+        tts_text = paragraph.get("tts_text") or paragraph["text"]
         text_hash = hashlib.md5(
-            f"{voice_name}|{voice_rate}|{paragraph['text']}".encode()
+            f"{voice_name}|{voice_rate}|{tts_text}".encode()
         ).hexdigest()[:12]
         audio_file = os.path.join(audio_dir, f"{paragraph['key']}-{text_hash}.mp3")
         paragraph["audio_file"] = audio_file
         if os.path.exists(audio_file):
             continue
-        logger.info(f"tts {paragraph['key']} ({len(paragraph['text'])} chars)")
+        logger.info(f"tts {paragraph['key']} ({len(tts_text)} chars)")
         sub_maker = voice.tts(
-            text=paragraph["text"],
+            text=tts_text,
             voice_name=voice_name,
             voice_rate=voice_rate,
             voice_file=audio_file,
@@ -87,6 +89,7 @@ def synthesize_paragraphs(project_id: str, paragraphs: list[dict]) -> None:
                 f"TTS failed for paragraph {paragraph['key']}; check the "
                 f"voice configuration (documentary.voice_name={voice_name})"
             )
+        costs.record_tts(voice_name, len(tts_text))
 
 
 def _measure_durations(paragraphs: list[dict]) -> None:
@@ -336,6 +339,7 @@ def _collect_paragraphs(script: dict, images: dict) -> list[dict]:
                 {
                     "key": key,
                     "text": text,
+                    "tts_text": str(paragraph.get("tts_text", "")).strip(),
                     "image_path": image_path,
                     "section_end": para_idx == len(section_paragraphs) - 1,
                 }
@@ -376,6 +380,8 @@ def run_render(project: dict) -> str:
     if not script or not images:
         raise RuntimeError("script or image selection missing; cannot render")
 
+    # Re-punctuate narration for TTS breathing room (cached per paragraph).
+    scriptwriter.ensure_prosody(project_id, script)
     paragraphs = _collect_paragraphs(script, images)
     logger.info(f"rendering {project_id}: {len(paragraphs)} segments")
 

@@ -181,6 +181,14 @@ def load_images(project_id: str) -> dict | None:
     return _read_json(_json_path(project_id, "images"))
 
 
+def save_costs(project_id: str, entries: list[dict]) -> None:
+    _write_json(_json_path(project_id, "costs"), entries)
+
+
+def load_costs(project_id: str) -> list[dict]:
+    return _read_json(_json_path(project_id, "costs")) or []
+
+
 def images_dir(project_id: str) -> str:
     d = os.path.join(project_dir(project_id), "images")
     os.makedirs(d, exist_ok=True)

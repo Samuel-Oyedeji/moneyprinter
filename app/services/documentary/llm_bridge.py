@@ -25,6 +25,56 @@ DEFAULT_VISION_MODEL = "google/gemini-3.5-flash"
 VISION_IMAGE_MAX_EDGE = 768
 
 
+def _openai_compatible_setup(model_key: str, default_model: str):
+    """(client, model) for direct OpenAI-compatible calls, or None.
+
+    Direct calls (instead of llm._generate_response) let us read token usage
+    and OpenRouter's reported cost for the project cost ledger.
+    """
+    from openai import OpenAI
+
+    doc_cfg = config.documentary
+    provider_id = str(
+        doc_cfg.get("llm_provider", DEFAULT_LLM_PROVIDER) or DEFAULT_LLM_PROVIDER
+    ).strip()
+    provider = get_llm_provider(provider_id)
+    if provider is None or provider.adapter != "openai_compatible":
+        return None
+    api_key = str(config.app.get(provider.config_key("api_key"), "") or "").strip()
+    if not api_key:
+        return None
+    base_url = provider.resolve_base_url(
+        config.app.get(provider.config_key("base_url"), "")
+    )
+    model = str(doc_cfg.get(model_key, "") or "").strip() or default_model
+    return OpenAI(api_key=api_key, base_url=base_url), model
+
+
+def _usage_extra_body(client) -> dict:
+    # OpenRouter reports the actual charged cost in usage when asked.
+    if "openrouter" in str(client.base_url):
+        return {"usage": {"include": True}}
+    return {}
+
+
+def _record_usage(kind: str, model: str, response) -> None:
+    from app.services.documentary import costs
+
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return
+    reported_cost = getattr(usage, "cost", None)
+    if reported_cost is None and getattr(usage, "model_extra", None):
+        reported_cost = usage.model_extra.get("cost")
+    costs.record_llm(
+        kind=kind,
+        model=model,
+        prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+        completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+        reported_cost=reported_cost,
+    )
+
+
 def _documentary_app_config() -> dict:
     """Build an app-config snapshot with the documentary LLM override applied.
 
@@ -50,14 +100,30 @@ def _documentary_app_config() -> dict:
 
 def generate_text(prompt: str) -> str:
     """Run one completion, raising on provider errors instead of returning them."""
+    setup = _openai_compatible_setup("llm_model_name", DEFAULT_MODEL_NAME)
     last_error = ""
     for attempt in range(_MAX_RETRIES):
-        response = llm_service._generate_response(
-            prompt=prompt, app_config=_documentary_app_config()
-        )
-        if response and not response.startswith("Error: "):
-            return response
-        last_error = response or "empty response"
+        if setup is not None:
+            # Direct call so token usage/cost can be recorded.
+            client, model = setup
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    extra_body=_usage_extra_body(client),
+                )
+                _record_usage("llm", model, response)
+                return llm_service._extract_chat_completion_text(response, model)
+            except Exception as exc:
+                last_error = llm_service._sanitize_error_message(exc)
+        else:
+            # Non-OpenAI-compatible provider: shared path, no usage tracking.
+            response = llm_service._generate_response(
+                prompt=prompt, app_config=_documentary_app_config()
+            )
+            if response and not response.startswith("Error: "):
+                return response
+            last_error = response or "empty response"
         logger.warning(
             f"documentary llm call failed (attempt {attempt + 1}/{_MAX_RETRIES}): "
             f"{last_error}"
@@ -98,30 +164,13 @@ def _vision_client():
     Vision calls go straight through the documentary provider (OpenRouter by
     default) because the shared _generate_response() path is text-only.
     """
-    from openai import OpenAI
-
-    doc_cfg = config.documentary
-    provider_id = str(
-        doc_cfg.get("llm_provider", DEFAULT_LLM_PROVIDER) or DEFAULT_LLM_PROVIDER
-    ).strip()
-    provider = get_llm_provider(provider_id)
-    if provider is None or provider.adapter != "openai_compatible":
+    setup = _openai_compatible_setup("vision_model", DEFAULT_VISION_MODEL)
+    if setup is None:
         raise ValueError(
-            f"documentary vision scoring needs an OpenAI-compatible provider; "
-            f"'{provider_id}' is not supported for vision calls"
+            "documentary vision scoring needs an OpenAI-compatible provider "
+            "with its API key set (documentary.llm_provider, default openrouter)"
         )
-    api_key = str(config.app.get(provider.config_key("api_key"), "") or "").strip()
-    if not api_key:
-        raise ValueError(
-            f"{provider.config_key('api_key')} is not set in config.toml"
-        )
-    base_url = provider.resolve_base_url(
-        config.app.get(provider.config_key("base_url"), "")
-    )
-    model = str(
-        doc_cfg.get("vision_model", DEFAULT_VISION_MODEL) or DEFAULT_VISION_MODEL
-    ).strip()
-    return OpenAI(api_key=api_key, base_url=base_url), model
+    return setup
 
 
 def _image_data_url(image_path: str) -> str:
@@ -152,7 +201,9 @@ def generate_vision_json(prompt: str, image_paths: list[str]):
             response = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": content}],
+                extra_body=_usage_extra_body(client),
             )
+            _record_usage("vision", model, response)
             text = llm_service._extract_chat_completion_text(response, "vision")
             try:
                 return json.loads(llm_service._strip_code_fence(text))

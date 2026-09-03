@@ -25,6 +25,25 @@ from app.utils import utils
 
 st.set_page_config(page_title="Documentary Studio", page_icon="🎬", layout="wide")
 
+# Keep the film preview at a sane size: full column width makes a 16:9
+# player enormous on wide screens. Same testid-based approach as Library.py.
+st.markdown(
+    """
+<style>
+video[data-testid="stVideo"] {
+    max-height: 340px;
+    width: auto !important;
+    max-width: 100%;
+    margin: 0 auto;
+    display: block;
+    border-radius: 10px;
+    background: #000;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
 st.page_link("Main.py", label="Back to generator", icon=":material/arrow_back:")
 st.title("🎬 Documentary Studio")
 st.caption(
@@ -563,21 +582,59 @@ elif status == store.STATUS_IMAGE_REVIEW:
         )
 
 elif status == store.STATUS_DONE:
+    from app.services.documentary import costs as costs_service
+
     st.subheader("🏁 Finished film")
     final_path = os.path.join(utils.task_dir(selected_id), "final-1.mp4")
     if os.path.exists(final_path):
+        script = store.load_script(selected_id) or {}
+        cost_summary = costs_service.summarize(selected_id)
+        size_mb = os.path.getsize(final_path) / (1024 * 1024)
+        word_count = script.get("word_count", 0)
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Narration", f"{word_count} words")
+        m2.metric("Approx. runtime", f"~{max(word_count, 1) // 150} min")
+        m3.metric("File size", f"{size_mb:,.0f} MB")
+        m4.metric(
+            "Generation cost",
+            f"${cost_summary['total']:.2f}"
+            + ("*" if cost_summary["any_estimated"] else ""),
+            help="Sum of tracked LLM, vision, search and TTS costs for this "
+            "project. * means at least part of it is estimated from "
+            "configured prices rather than reported by the provider.",
+        )
+
         st.video(final_path)
         st.caption(
             "The film is also in the Video Library, so the existing YouTube "
             "upload and scheduling flows can use it."
         )
+
+        button_col, cost_col = st.columns([1, 2])
         srt_path = os.path.join(utils.task_dir(selected_id), "final-1.srt")
         if os.path.exists(srt_path):
             with open(srt_path, "r", encoding="utf-8") as f:
-                st.download_button(
-                    "⬇️ Download subtitles (.srt)",
+                button_col.download_button(
+                    "⬇️ Subtitles (.srt)",
                     f.read(),
                     file_name=f"{selected_id}.srt",
+                )
+        if cost_summary["entries"]:
+            with st.expander("💰 Cost breakdown"):
+                for kind, bucket in sorted(cost_summary["by_kind"].items()):
+                    detail = f"{bucket['count']} calls"
+                    if bucket["tokens"]:
+                        detail += f" · {bucket['tokens']:,} tokens"
+                    if bucket["characters"]:
+                        detail += f" · {bucket['characters']:,} chars"
+                    st.markdown(
+                        f"- **{kind}**: ${bucket['cost']:.4f} ({detail})"
+                    )
+                st.caption(
+                    "Prices for estimated entries come from [documentary] "
+                    "config: llm_price_per_mtok, vision_price_per_mtok, "
+                    "serpapi_price_per_search, elevenlabs_price_per_1k_chars."
                 )
     else:
         st.error("Final video not found on disk.")

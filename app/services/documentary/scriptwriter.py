@@ -13,8 +13,10 @@ verbatim at runtime as a few-shot exemplar; it is deliberately not shipped
 with the codebase.
 """
 
+import hashlib
 import json
 import os
+import re
 
 from loguru import logger
 
@@ -55,6 +57,11 @@ STYLE_SPEC = """
   in the fact sheet, introduced plainly ("one witness recalled...").
 - Dramatic irony is the signature move of the cold open: describe a small,
   ordinary moment, then reveal quietly that it preceded catastrophe.
+- Punctuate for the ear, not the page: this text will be read aloud.
+  Prefer several shorter sentences over one long one; use an ellipsis
+  ("...") where the narrator should pause before a reveal or between
+  beats; use an em dash for an aside. A paragraph should never read as
+  one unbroken breath.
 
 ## Structure
 1. COLD OPEN (2-3 paragraphs, may use present tense for the first paragraph
@@ -210,6 +217,96 @@ def _validate_script(
             "cut whole paragraphs, do not compress sentences"
         )
     return word_count, problems
+
+
+# ------------------------------------------------------------------ prosody
+def _word_signature(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def _iter_paragraphs(script: dict):
+    for section in script.get("sections", []):
+        for paragraph in section.get("paragraphs", []):
+            yield paragraph
+
+
+def ensure_prosody(project_id: str, script: dict) -> None:
+    """Give every paragraph a TTS-ready twin punctuated for breathing room.
+
+    TTS engines pause on punctuation, so long FH paragraphs read as one
+    unbroken breath unless the text is re-punctuated for the ear: ellipses
+    between beats, run-ons split into shorter sentences, dashes for asides.
+    The rewritten text goes in paragraph["tts_text"] and feeds narration
+    only — the reviewed script text and subtitles stay as written. Cached by
+    a hash of the source text, so edits re-trigger just their paragraphs.
+    """
+    pending = []
+    for index, paragraph in enumerate(_iter_paragraphs(script)):
+        text = str(paragraph.get("text", "")).strip()
+        if not text:
+            continue
+        text_hash = hashlib.md5(text.encode()).hexdigest()[:12]
+        if (
+            paragraph.get("tts_text")
+            and paragraph.get("tts_source_hash") == text_hash
+        ):
+            continue
+        pending.append((f"p{index}", text_hash, paragraph))
+    if not pending:
+        return
+
+    listing = "\n\n".join(f"[{pid}]\n{p['text']}" for pid, _, p in pending)
+    prompt = f"""
+# Role: Narration Prosody Editor
+
+The paragraphs below will be read aloud by a text-to-speech narrator for a
+calm, measured documentary. TTS pauses ONLY on punctuation, so re-punctuate
+each paragraph for natural breathing room.
+
+## Hard rules
+1. Do NOT add, remove, reorder or change any words. Punctuation and
+   spacing only. Numbers, names and spellings stay exactly as written.
+2. Split long or run-on sentences into shorter ones with full stops.
+3. Insert an ellipsis ("...") where the narrator should take a real pause:
+   before a quiet reveal, between distinct beats, after a scene-setting
+   opener. One to three per long paragraph; short paragraphs may need none.
+4. Use an em dash ( — ) for asides; a question mark where a sentence is
+   genuinely a question.
+5. Do not overdo it — the aim is a human breathing pattern, not drama.
+
+## Output
+Respond ONLY with a JSON object mapping each id to its re-punctuated text:
+{{"p0": "...", "p3": "..."}}
+
+## Paragraphs
+{listing}
+""".strip()
+
+    try:
+        rewritten = llm_bridge.generate_json(prompt)
+        if not isinstance(rewritten, dict):
+            raise ValueError("prosody response is not an object")
+    except Exception as exc:
+        logger.warning(f"prosody pass failed, narrating original text: {exc}")
+        return
+
+    applied = 0
+    for pid, text_hash, paragraph in pending:
+        candidate = str(rewritten.get(pid, "")).strip()
+        if candidate and _word_signature(candidate) == _word_signature(
+            paragraph["text"]
+        ):
+            paragraph["tts_text"] = candidate
+            paragraph["tts_source_hash"] = text_hash
+            applied += 1
+        else:
+            # Word content changed or the paragraph is missing: narrate the
+            # original rather than risk altered facts.
+            logger.warning(f"prosody rewrite rejected for {pid}")
+            paragraph["tts_text"] = paragraph["text"]
+            paragraph["tts_source_hash"] = text_hash
+    store.save_script(project_id, script)
+    logger.info(f"prosody pass applied to {applied}/{len(pending)} paragraphs")
 
 
 def full_narration_text(script: dict) -> str:

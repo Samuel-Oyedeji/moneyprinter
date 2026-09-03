@@ -534,6 +534,13 @@ vision_model = "google/gemini-3.5-flash"
 # Opening title card: event name + date over the first image.
 intro_enabled = true
 intro_font = "BeVietnamPro-Bold.ttf"
+# Cost tracking. OpenRouter reports actual per-call cost; anything else is
+# estimated from these prices (USD). Token prices are [input, output] per
+# million tokens.
+# llm_price_per_mtok = [3.0, 15.0]
+# vision_price_per_mtok = [0.30, 2.50]
+# serpapi_price_per_search = 0.01
+# elevenlabs_price_per_1k_chars = 0.22
 
 # =============================================================================
 # TTS Providers / 语音合成服务

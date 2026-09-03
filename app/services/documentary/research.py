@@ -15,7 +15,7 @@ import requests
 from loguru import logger
 
 from app.config import config
-from app.services.documentary import llm_bridge, store, webtext
+from app.services.documentary import costs, llm_bridge, store, webtext
 
 SERPAPI_ENDPOINT = "https://serpapi.com/search.json"
 MAX_QUERIES = 5
@@ -137,6 +137,7 @@ def _serpapi_search(query: str, engine: str) -> list[dict]:
         response = requests.get(SERPAPI_ENDPOINT, params=params, timeout=30)
         response.raise_for_status()
         data = response.json()
+        costs.record_serpapi(f"{engine}: {query}")
     except Exception as exc:
         logger.warning(f"serpapi search failed for {query!r} ({engine}): {exc}")
         return []

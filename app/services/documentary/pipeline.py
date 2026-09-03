@@ -8,11 +8,19 @@ script review → image sourcing → image review → render → done.
 
 from loguru import logger
 
-from app.services.documentary import images, render, research, scriptwriter, store
+from app.services.documentary import (
+    costs,
+    images,
+    render,
+    research,
+    scriptwriter,
+    store,
+)
 
 
 def run_research_stage(project: dict) -> dict:
     """Research the topic; ends in factsheet_review (or scripting if auto)."""
+    costs.set_project(project["project_id"])
     store.set_status(project, store.STATUS_RESEARCHING)
     try:
         research.run_research(project)
@@ -29,6 +37,7 @@ def run_research_stage(project: dict) -> dict:
 
 def approve_factsheet(project: dict) -> dict:
     """Fact sheet approved (by human or auto): generate the script."""
+    costs.set_project(project["project_id"])
     store.set_status(project, store.STATUS_SCRIPTING)
     factsheet = store.load_factsheet(project["project_id"])
     if not factsheet:
@@ -60,6 +69,7 @@ def approve_script(project: dict) -> dict:
 
 def run_image_sourcing_stage(project: dict) -> dict:
     """Source candidate images for every cue; ends in image_review."""
+    costs.set_project(project["project_id"])
     store.set_status(project, store.STATUS_SOURCING_IMAGES)
     try:
         images.run_image_sourcing(project)
@@ -76,6 +86,7 @@ def run_image_sourcing_stage(project: dict) -> dict:
 
 def approve_images(project: dict) -> dict:
     """Image selection approved: render the final video."""
+    costs.set_project(project["project_id"])
     store.set_status(project, store.STATUS_RENDERING)
     try:
         render.run_render(project)
