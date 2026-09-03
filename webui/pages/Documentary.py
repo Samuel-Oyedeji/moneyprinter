@@ -65,13 +65,75 @@ STATUS_LABELS = {
     store.STATUS_FAILED: "❌ Failed",
 }
 
+from app.services.documentary import research as research_service
+
 serpapi_ready = bool(str(config.documentary.get("serpapi_api_key", "")).strip())
+
+
+def _refresh_serpapi_quota():
+    st.session_state["serpapi_quota"] = research_service.get_quota()
+
+
+if serpapi_ready and "serpapi_quota" not in st.session_state:
+    _refresh_serpapi_quota()
+serpapi_quota = st.session_state.get("serpapi_quota")
+
 if not serpapi_ready:
     st.warning(
-        "`documentary.serpapi_api_key` is empty in config.toml — research "
-        "will fail until it is set.",
+        "SerpApi key is not set — research will fail. Add it under "
+        "research settings below.",
         icon="🔑",
     )
+elif serpapi_quota and serpapi_quota.get("error"):
+    st.error(f"🔑 {serpapi_quota['error']} — fix it in research settings below.")
+elif serpapi_quota and (serpapi_quota.get("left") or 0) <= 0 and serpapi_quota.get(
+    "left"
+) is not None:
+    st.error(
+        "🚫 The SerpApi key has no searches left — research is blocked. "
+        "Change or top up the key in research settings, then refresh."
+    )
+elif serpapi_quota and (serpapi_quota.get("left") or 0) < research_service.QUOTA_WARN_THRESHOLD:
+    st.warning(
+        f"SerpApi quota is low: {serpapi_quota['left']} searches left "
+        "(one research run uses ~14).",
+        icon="⏳",
+    )
+
+# --------------------------------------------------------- research settings
+with st.expander("🔎 Research settings (SerpApi)"):
+    serpapi_key = st.text_input(
+        "SerpApi API key",
+        value=str(config.documentary.get("serpapi_api_key", "") or ""),
+        type="password",
+        help="https://serpapi.com/manage-api-key — the free tier includes "
+        "250 searches/month.",
+    )
+    if serpapi_key != str(config.documentary.get("serpapi_api_key", "") or ""):
+        config.documentary["serpapi_api_key"] = serpapi_key
+        config.save_config()
+        _refresh_serpapi_quota()
+        st.rerun()
+
+    quota_col, refresh_col = st.columns([3, 1], vertical_alignment="center")
+    if serpapi_quota is None:
+        quota_col.caption(
+            "Quota unknown — no key set, or SerpApi was unreachable."
+        )
+    elif serpapi_quota.get("error"):
+        quota_col.error(serpapi_quota["error"])
+    else:
+        left = serpapi_quota.get("left")
+        per_month = serpapi_quota.get("per_month")
+        quota_col.metric(
+            "Searches left",
+            f"{left if left is not None else '?'}"
+            + (f" / {per_month}" if per_month else ""),
+            help="One research run uses ~14 searches (7 queries × 2 engines).",
+        )
+    if refresh_col.button("🔄 Refresh quota"):
+        _refresh_serpapi_quota()
+        st.rerun()
 
 # ------------------------------------------------------------ voice settings
 with st.expander("🎙 Narration voice settings"):

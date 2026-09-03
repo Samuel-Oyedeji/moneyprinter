@@ -18,6 +18,12 @@ from app.config import config
 from app.services.documentary import costs, llm_bridge, store, webtext
 
 SERPAPI_ENDPOINT = "https://serpapi.com/search.json"
+SERPAPI_ACCOUNT_ENDPOINT = "https://serpapi.com/account"
+QUOTA_WARN_THRESHOLD = 20  # one research run is ~14 searches
+
+
+class SerpApiQuotaError(RuntimeError):
+    """SerpApi key has no searches left (or is invalid)."""
 MAX_QUERIES = 5
 MAX_SOURCES = 8
 MAX_SOURCE_CHARS = 9000
@@ -88,6 +94,63 @@ def _serpapi_key() -> str:
     return key
 
 
+def get_quota(api_key: str | None = None) -> dict | None:
+    """Ask SerpApi how many searches the key has left.
+
+    The /account endpoint is free (it does not consume a search). Returns
+    {"left", "per_month", "used"} on success, {"error": ...} for an invalid
+    key, and None when the key is unset or the endpoint is unreachable.
+    """
+    key = (api_key or "").strip() or str(
+        config.documentary.get("serpapi_api_key", "") or ""
+    ).strip()
+    if not key:
+        return None
+    try:
+        response = requests.get(
+            SERPAPI_ACCOUNT_ENDPOINT, params={"api_key": key}, timeout=15
+        )
+        if response.status_code in (401, 403):
+            return {"error": "SerpApi rejected this API key"}
+        response.raise_for_status()
+        data = response.json()
+    except Exception as exc:
+        logger.warning(f"serpapi quota check failed: {exc}")
+        return None
+
+    left = data.get("total_searches_left", data.get("plan_searches_left"))
+    return {
+        "left": int(left) if left is not None else None,
+        "per_month": data.get("searches_per_month"),
+        "used": data.get("this_month_usage"),
+    }
+
+
+def check_quota_guardrail() -> None:
+    """Raise before a research run that has no searches to work with."""
+    quota = get_quota()
+    if quota is None:
+        return  # unreachable endpoint shouldn't block research outright
+    if quota.get("error"):
+        raise SerpApiQuotaError(
+            f"{quota['error']} — update documentary.serpapi_api_key in the "
+            "research settings and refresh the quota."
+        )
+    left = quota.get("left")
+    if left is None:
+        return
+    if left <= 0:
+        raise SerpApiQuotaError(
+            "The SerpApi key has 0 searches left. Change or top up the key "
+            "in the research settings, then refresh the quota."
+        )
+    if left < QUOTA_WARN_THRESHOLD:
+        logger.warning(
+            f"SerpApi quota is low: {left} searches left (a research run "
+            f"uses ~14)"
+        )
+
+
 def plan_queries(topic: str, user_notes: str) -> list[str]:
     """Ask the LLM for search queries, then add deterministic staples."""
     prompt = f"""
@@ -135,9 +198,22 @@ def _serpapi_search(query: str, engine: str) -> list[dict]:
     }
     try:
         response = requests.get(SERPAPI_ENDPOINT, params=params, timeout=30)
+        try:
+            data = response.json()
+        except ValueError:
+            data = {}
+        # A mid-run quota exhaustion must stop the whole research pass loudly
+        # instead of degrading into "no usable web sources".
+        error_text = str(data.get("error", ""))
+        if "run out of searches" in error_text.lower():
+            raise SerpApiQuotaError(
+                "The SerpApi key ran out of searches mid-run. Change or top "
+                "up the key in the research settings, then retry."
+            )
         response.raise_for_status()
-        data = response.json()
         costs.record_serpapi(f"{engine}: {query}")
+    except SerpApiQuotaError:
+        raise
     except Exception as exc:
         logger.warning(f"serpapi search failed for {query!r} ({engine}): {exc}")
         return []
@@ -334,6 +410,7 @@ def run_research(project: dict) -> dict:
     topic = project["topic"]
     user_notes = project.get("user_notes", "")
 
+    check_quota_guardrail()
     queries = plan_queries(topic, user_notes)
     logger.info(f"research queries for {project_id}: {queries}")
 

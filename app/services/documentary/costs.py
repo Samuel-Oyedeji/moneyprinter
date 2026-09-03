@@ -28,7 +28,10 @@ _active_project_id: str | None = None
 DEFAULT_LLM_PRICE_PER_MTOK = (3.0, 15.0)  # (input, output) USD per 1M tokens
 DEFAULT_VISION_PRICE_PER_MTOK = (0.30, 2.50)
 DEFAULT_SERPAPI_PRICE_PER_SEARCH = 0.01
-DEFAULT_ELEVENLABS_PRICE_PER_1K_CHARS = 0.22
+# ElevenLabs bills ~$0.10/1k chars for v2 Multilingual (the app's default
+# model_id); v3 Conversational and Flash/Turbo are $0.05. Override in
+# [documentary] if the model or plan differs.
+DEFAULT_ELEVENLABS_PRICE_PER_1K_CHARS = 0.10
 
 
 def set_project(project_id: str | None) -> None:

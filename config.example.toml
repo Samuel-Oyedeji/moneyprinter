@@ -540,7 +540,7 @@ intro_font = "BeVietnamPro-Bold.ttf"
 # llm_price_per_mtok = [3.0, 15.0]
 # vision_price_per_mtok = [0.30, 2.50]
 # serpapi_price_per_search = 0.01
-# elevenlabs_price_per_1k_chars = 0.22
+# elevenlabs_price_per_1k_chars = 0.10   # v2 Multilingual; v3 conv/Flash: 0.05
 
 # =============================================================================
 # TTS Providers / 语音合成服务
