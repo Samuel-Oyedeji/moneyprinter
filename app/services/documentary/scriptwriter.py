@@ -309,6 +309,60 @@ Respond ONLY with a JSON object mapping each id to its re-punctuated text:
     logger.info(f"prosody pass applied to {applied}/{len(pending)} paragraphs")
 
 
+def ensure_youtube_description(
+    project_id: str, script: dict, regenerate: bool = False
+) -> str:
+    """Write a proper YouTube description from the finished film.
+
+    The scriptwriter's inline description tends to read like the opening of
+    the narration; this dedicated pass writes actual publishing copy — a
+    hook line, then what the film covers — and caches it on the script.
+    """
+    youtube_meta = script.setdefault("youtube", {})
+    if youtube_meta.get("description_enhanced") and not regenerate:
+        return youtube_meta.get("description", "")
+
+    narration = full_narration_text(script)[:6000]
+    prompt = f"""
+# Role: YouTube Copywriter for a Historical Documentary Channel
+
+Write the video description for the documentary below. This is publishing
+copy, not narration: do NOT reuse or paraphrase the film's opening lines.
+
+## Rules
+1. First line: a compelling, factual hook, at most 110 characters — this
+   is what viewers see before "show more". No clickbait, no all-caps.
+2. Then 2 short paragraphs (60-90 words total): what happened, and what
+   the film covers — the build-up, the disaster, the investigation, the
+   legacy. Written to intrigue, not to summarize away the whole story.
+3. Tone: respectful and measured; real people died in this event.
+4. No emojis, no hashtags, no links, no "subscribe" begging. A single
+   quiet closing line inviting viewers to watch is fine.
+5. Respond ONLY with JSON: {{"description": "..."}}
+
+## Film title
+{youtube_meta.get("title", script.get("title", ""))}
+
+## Narration (for facts only — do not copy its wording)
+{narration}
+""".strip()
+
+    try:
+        result = llm_bridge.generate_json(prompt)
+        description = str((result or {}).get("description", "")).strip()
+    except Exception as exc:
+        logger.warning(f"description generation failed, keeping existing: {exc}")
+        return youtube_meta.get("description", "")
+    if not description:
+        return youtube_meta.get("description", "")
+
+    youtube_meta["description"] = description
+    youtube_meta["description_enhanced"] = True
+    store.save_script(project_id, script)
+    logger.success(f"youtube description written for {project_id}")
+    return description
+
+
 def full_narration_text(script: dict) -> str:
     """Concatenate all paragraph texts — the input for TTS in phase 2."""
     paragraphs = []

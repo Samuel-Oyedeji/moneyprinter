@@ -321,10 +321,24 @@ def _render_library_tab():
                     f"cost ${cost_summary['total']:.2f}"
                     + ("*" if cost_summary["any_estimated"] else "")
                 )
-                if youtube_meta.get("description"):
-                    with st.expander("Description & tags"):
-                        st.write(youtube_meta.get("description", ""))
-                        st.caption(", ".join(youtube_meta.get("tags", [])))
+                with st.expander("Description & tags"):
+                    if not youtube_meta.get("description_enhanced"):
+                        st.caption(
+                            "⚠️ Draft description from the scriptwriter — use "
+                            "the button below to write proper publishing copy "
+                            "(also happens automatically before upload)."
+                        )
+                    st.write(youtube_meta.get("description", "") or "_none yet_")
+                    st.caption(", ".join(youtube_meta.get("tags", [])))
+                    if st.button(
+                        "✍️ Write proper description", key=f"lib_desc_{pid}"
+                    ):
+                        costs_service.set_project(pid)
+                        with st.spinner("Writing the YouTube description…"):
+                            scriptwriter.ensure_youtube_description(
+                                pid, script, regenerate=True
+                            )
+                        st.rerun()
                 already = [
                     e
                     for e in doc_schedule.list_entries()
@@ -527,30 +541,54 @@ if not projects:
     st.info("No documentary projects yet — create one above.")
     st.stop()
 
-# ------------------------------------------------------------ project picker
-labels = {
-    p["project_id"]: (
-        f"{p['topic'][:60]}  ·  {STATUS_LABELS.get(p['status'], p['status'])}"
-    )
-    for p in projects
-}
-default_id = st.session_state.get("doc_selected", projects[0]["project_id"])
-project_ids = [p["project_id"] for p in projects]
-selected_id = st.selectbox(
-    "Project",
-    project_ids,
-    index=project_ids.index(default_id) if default_id in project_ids else 0,
-    format_func=lambda pid: labels[pid],
-)
-st.session_state["doc_selected"] = selected_id
-project = store.load_project(selected_id)
-if not project:
-    st.error("Project metadata missing on disk.")
+# -------------------------------------------------------------- project grid
+selected_id = st.session_state.get("doc_selected")
+if selected_id and not store.load_project(selected_id):
+    selected_id = None
+    st.session_state.pop("doc_selected", None)
+
+if not selected_id:
+    grid_columns = 3
+    for row_start in range(0, len(projects), grid_columns):
+        cols = st.columns(grid_columns)
+        for col, grid_project in zip(
+            cols, projects[row_start : row_start + grid_columns]
+        ):
+            pid = grid_project["project_id"]
+            with col, st.container(border=True):
+                script = store.load_script(pid) or {}
+                title = script.get("title") or grid_project["topic"]
+                st.markdown(f"**{title[:60]}**")
+                created = datetime.fromtimestamp(
+                    grid_project["created_at"]
+                ).strftime("%b %d, %Y")
+                st.caption(
+                    f"{STATUS_LABELS.get(grid_project['status'], grid_project['status'])}"
+                    f"  \n{created}"
+                )
+                if grid_project["status"] == store.STATUS_DONE:
+                    cost_total = costs_service.summarize(pid)["total"]
+                    st.caption(
+                        f"{script.get('word_count', 0)} words · "
+                        f"~{max(script.get('word_count', 0), 1) // 150} min · "
+                        f"${cost_total:.2f}"
+                    )
+                elif grid_project.get("error"):
+                    st.caption(f"⚠️ {grid_project['error'][:60]}")
+                if st.button(
+                    "Open →", key=f"grid_open_{pid}", use_container_width=True
+                ):
+                    st.session_state["doc_selected"] = pid
+                    st.rerun()
     st.stop()
 
+project = store.load_project(selected_id)
 status = project["status"]
 created = datetime.fromtimestamp(project["created_at"]).strftime("%b %d, %Y %H:%M")
-meta_col, del_col = st.columns([5, 1], vertical_alignment="center")
+back_col, meta_col, del_col = st.columns([1, 4, 1], vertical_alignment="center")
+if back_col.button("← All projects"):
+    st.session_state.pop("doc_selected", None)
+    st.rerun()
 meta_col.markdown(
     f"**{project['topic']}**  \n"
     f"{STATUS_LABELS.get(status, status)} · created {created}"

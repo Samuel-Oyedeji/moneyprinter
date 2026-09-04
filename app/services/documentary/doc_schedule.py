@@ -239,16 +239,16 @@ def _upload_entry(entry: dict, project: dict) -> None:
     if not os.path.isfile(final_path):
         raise RuntimeError("final video missing; re-render the project")
 
+    costs.set_project(project_id)
     script = store.load_script(project_id) or {}
     youtube_meta = script.get("youtube", {})
     title = youtube_meta.get("title") or project["topic"]
-    description = youtube_meta.get("description", "")
+    description = scriptwriter.ensure_youtube_description(project_id, script)
     credits = images_service.credits_block(store.load_images(project_id) or {})
     if credits:
         description = f"{description}\n\nImage credits:\n{credits}".strip()
     tags = youtube_meta.get("tags", [])
 
-    costs.set_project(project_id)
     thumb = thumbnail.ensure_thumbnail(project)
 
     publish_at = shorts_schedule._compute_publish_at(entry)
