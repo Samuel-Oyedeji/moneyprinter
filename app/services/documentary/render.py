@@ -32,6 +32,9 @@ PARAGRAPH_GAP = 0.7  # seconds of silence after each paragraph
 SECTION_GAP = 1.4  # longer beat between sections
 FADE_DURATION = 0.4
 INTRO_DURATION = 5.0
+# Beats narrated longer than this get a second image (when a decent unused
+# candidate exists) so no still overstays its welcome.
+DEFAULT_IMAGE_SPLIT_SECONDS = 18.0
 
 DEFAULT_VOICE = "en-GB-RyanNeural-Male"
 DEFAULT_INTRO_FONT = "BeVietnamPro-Bold.ttf"
@@ -249,9 +252,8 @@ def _render_intro_segment(
 
 
 def _render_segment(
-    project_id: str, index: int, paragraph: dict, image_path: str
+    project_id: str, index: int, image_path: str, duration: float
 ) -> str:
-    duration = paragraph["display_seconds"]
     frames = max(int(duration * FPS), FPS)
     segment_path = os.path.join(
         store.render_dir(project_id), f"seg-{index:03d}.mp4"
@@ -275,7 +277,7 @@ def _render_segment(
             "-an",
             segment_path,
         ],
-        context=f"segment {paragraph['key']}",
+        context=f"segment {index}",
     )
     return segment_path
 
@@ -341,6 +343,7 @@ def _collect_paragraphs(script: dict, images: dict) -> list[dict]:
                     "text": text,
                     "tts_text": str(paragraph.get("tts_text", "")).strip(),
                     "image_path": image_path,
+                    "extra_image_path": images_service.secondary_image_path(item),
                     "section_end": para_idx == len(section_paragraphs) - 1,
                 }
             )
@@ -401,10 +404,25 @@ def run_render(project: dict) -> str:
             )
         )
         intro_seconds = INTRO_DURATION
-    for index, paragraph in enumerate(paragraphs):
-        logger.info(f"segment {index + 1}/{len(paragraphs)} ({paragraph['key']})")
+    # Long beats get a second image so no still overstays its welcome.
+    split_seconds = float(
+        config.documentary.get("image_split_seconds", DEFAULT_IMAGE_SPLIT_SECONDS)
+        or DEFAULT_IMAGE_SPLIT_SECONDS
+    )
+    chunks: list[tuple[str, str, float]] = []
+    for paragraph in paragraphs:
+        duration = paragraph["display_seconds"]
+        extra = paragraph.get("extra_image_path", "")
+        if extra and duration > split_seconds:
+            chunks.append((paragraph["key"], paragraph["image_path"], duration * 0.55))
+            chunks.append((f"{paragraph['key']}+", extra, duration * 0.45))
+        else:
+            chunks.append((paragraph["key"], paragraph["image_path"], duration))
+
+    for index, (chunk_key, image_path, duration) in enumerate(chunks):
+        logger.info(f"segment {index + 1}/{len(chunks)} ({chunk_key})")
         segment_paths.append(
-            _render_segment(project_id, index, paragraph, paragraph["image_path"])
+            _render_segment(project_id, index, image_path, duration)
         )
 
     visual_path = _concat_segments(project_id, segment_paths)

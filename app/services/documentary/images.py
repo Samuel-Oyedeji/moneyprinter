@@ -229,16 +229,23 @@ def search_pixabay_photos(query: str, count: int) -> list[dict]:
 
 
 # ------------------------------------------------------------ query planning
-def plan_image_queries(items: list[dict]) -> dict:
+def plan_image_queries(topic: str, items: list[dict]) -> dict:
     """One LLM call: verbose image cues → short per-provider search queries."""
     cue_lines = [f'- {item["key"]}: {item["cue"]}' for item in items]
     prompt = f"""
 # Role: Photo Researcher
 
+You are sourcing photographs for a documentary about: {topic}
+
 Convert each image cue below into two short search queries:
-- "archival": 2-5 words for archive photo search (Wikimedia Commons) —
-  concrete nouns and places, no style words like "archival feel" or "mood".
-- "stock": 2-4 words for stock photo search — generic, visual, English.
+- "archival": 3-6 words for archive photo search (Wikimedia Commons).
+  Anchor EVERY archival query to the actual event, its location or its
+  era — include the event name, city or year wherever plausible (e.g.
+  "Eastland disaster Chicago 1915", not "ship hull"). Concrete nouns
+  only, no style words like "archival feel" or "mood".
+- "stock": 2-4 words for stock photo search — a full scene clearly
+  relevant to the beat, never a symbolic object. Do not emit queries for
+  badges, flags, emblems, textures or close-up props.
 
 Respond ONLY with a JSON object mapping each key to
 {{"archival": "...", "stock": "..."}}. No other text.
@@ -308,7 +315,7 @@ def gather_candidates_for_cue(project_id: str, key: str, queries: dict) -> list[
 
 
 # ------------------------------------------------------------------ scoring
-def score_candidates(item: dict) -> None:
+def score_candidates(item: dict, topic: str = "") -> None:
     """Have the vision model view and score this cue's candidates.
 
     Scores land on the candidates and the best one becomes the selection, so
@@ -324,8 +331,9 @@ def score_candidates(item: dict) -> None:
 # Role: Documentary Picture Editor
 
 You are choosing the still photograph for one narration beat of a factual
-historical documentary. The images below are numbered starting at 1, in
-order. View each image and score it 0-10 for this beat.
+historical documentary about: {topic or "a historical event"}
+The images below are numbered starting at 1, in order. View each image and
+score it 0-10 for this beat.
 
 ## Narration beat
 {item.get("text_preview", "")}
@@ -334,7 +342,12 @@ order. View each image and score it 0-10 for this beat.
 {item.get("cue", "")}
 
 ## Scoring criteria
-- Relevance to the brief and narration (most important).
+- Relevance to THIS EVENT and this beat (most important): a photograph of
+  the actual event, its location, or a clearly matching scene from the
+  same era scores highest.
+- An image that is merely symbolic of one word in the narration — a badge
+  for "soldier", a flag, an emblem, a texture, a generic close-up object —
+  scores at most 2, even if technically related.
 - Looks like a real photograph of a real place/thing. Posters, logos, maps,
   drawings, watermarked images, text-heavy images and obvious stock-studio
   shots score at most 3.
@@ -373,7 +386,7 @@ def _best_score(item: dict) -> float:
     )
 
 
-def rescue_low_scoring_cue(project_id: str, item: dict) -> None:
+def rescue_low_scoring_cue(project_id: str, item: dict, topic: str = "") -> None:
     """One retry for cues where every candidate scored poorly.
 
     Uses the vision model's rejection reasons to ask for a better archival
@@ -388,9 +401,11 @@ def rescue_low_scoring_cue(project_id: str, item: dict) -> None:
     prompt = f"""
 # Role: Photo Researcher
 
-An image search for a documentary beat returned only poor candidates.
-Suggest ONE better search query (2-5 words, concrete nouns/places, English)
-for a photo archive. Respond ONLY with JSON: {{"query": "..."}}
+An image search for a documentary beat about "{topic}" returned only poor
+candidates. Suggest ONE better search query (3-6 words, concrete
+nouns/places, English) for a photo archive — anchored to the actual event,
+its location or its era, never a symbolic object. Respond ONLY with JSON:
+{{"query": "..."}}
 
 ## Picture brief
 {item.get("cue", "")}
@@ -419,7 +434,7 @@ for a photo archive. Respond ONLY with JSON: {{"query": "..."}}
         ),
     }
     retry_item["selected"] = 0 if retry_item["candidates"] else None
-    score_candidates(retry_item)
+    score_candidates(retry_item, topic)
     if _best_score(retry_item) > _best_score(item):
         item.update(
             {
@@ -439,7 +454,7 @@ def build_items_from_script(script: dict) -> list[dict]:
                 {
                     "key": f"s{section_idx}p{para_idx}",
                     "section": section.get("name", f"section{section_idx}"),
-                    "text_preview": str(paragraph.get("text", ""))[:160],
+                    "text_preview": str(paragraph.get("text", ""))[:400],
                     "cue": str(paragraph.get("image_cue", "")).strip()
                     or str(paragraph.get("text", ""))[:60],
                 }
@@ -454,8 +469,9 @@ def run_image_sourcing(project: dict) -> dict:
     if not script:
         raise RuntimeError("script missing; approve a script first")
 
+    topic = project.get("topic", "")
     items = build_items_from_script(script)
-    planned = plan_image_queries(items)
+    planned = plan_image_queries(topic, items)
 
     for item in items:
         item["queries"] = _queries_for(item, planned)
@@ -463,9 +479,9 @@ def run_image_sourcing(project: dict) -> dict:
             project_id, item["key"], item["queries"]
         )
         item["selected"] = 0 if item["candidates"] else None
-        score_candidates(item)
+        score_candidates(item, topic)
         if 0 <= _best_score(item) < RESCUE_SCORE_THRESHOLD:
-            rescue_low_scoring_cue(project_id, item)
+            rescue_low_scoring_cue(project_id, item, topic)
         logger.info(
             f"cue {item['key']}: {len(item['candidates'])} candidates, "
             f"selected #{item['selected']}, best score {_best_score(item):.1f} "
@@ -482,6 +498,7 @@ def run_image_sourcing(project: dict) -> dict:
 
 def research_cue(project_id: str, key: str, query: str) -> dict:
     """Re-search a single cue with a user-edited query (both lanes)."""
+    project = store.load_project(project_id) or {}
     images = store.load_images(project_id) or {"items": []}
     for item in images["items"]:
         if item["key"] == key:
@@ -490,7 +507,7 @@ def research_cue(project_id: str, key: str, query: str) -> dict:
                 project_id, key, item["queries"]
             )
             item["selected"] = 0 if item["candidates"] else None
-            score_candidates(item)
+            score_candidates(item, project.get("topic", ""))
             break
     store.save_images(project_id, images)
     return images
@@ -506,6 +523,25 @@ def selected_image_path(item: dict) -> str:
         path = item["candidates"][selected].get("local_path", "")
         return path if path and os.path.exists(path) else ""
     return ""
+
+
+def secondary_image_path(item: dict | None, min_score: float = 5.0) -> str:
+    """A decent second image for a long beat: best-scored unused candidate."""
+    if not item:
+        return ""
+    primary = selected_image_path(item)
+    best_path, best_score = "", min_score - 0.001
+    for index, candidate in enumerate(item.get("candidates", [])):
+        path = candidate.get("local_path", "")
+        score = float(candidate.get("score", -1) or -1)
+        if (
+            path
+            and path != primary
+            and os.path.exists(path)
+            and score > best_score
+        ):
+            best_path, best_score = path, score
+    return best_path
 
 
 def credits_block(images: dict) -> str:

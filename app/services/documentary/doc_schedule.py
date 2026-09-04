@@ -178,6 +178,18 @@ def daily_upload_load(date: str) -> dict:
     }
 
 
+def sources_block(project_id: str, limit: int = 8) -> str:
+    """Research-source attribution lines for the video description."""
+    factsheet = store.load_factsheet(project_id) or {}
+    lines = []
+    for source in (factsheet.get("source_index") or [])[:limit]:
+        title = source.get("title") or source.get("domain") or ""
+        url = source.get("url", "")
+        if url:
+            lines.append(f"{title} — {url}".strip(" —"))
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------- execution
 def _resolve_project(entry: dict) -> dict:
     """Load (or, for auto entries, create) the entry's project."""
@@ -244,6 +256,11 @@ def _upload_entry(entry: dict, project: dict) -> None:
     youtube_meta = script.get("youtube", {})
     title = youtube_meta.get("title") or project["topic"]
     description = scriptwriter.ensure_youtube_description(project_id, script)
+    # Research sources sit above image credits: they back the narration and
+    # matter more to viewers of a factual channel.
+    sources = sources_block(project_id)
+    if sources:
+        description = f"{description}\n\nSources:\n{sources}".strip()
     credits = images_service.credits_block(store.load_images(project_id) or {})
     if credits:
         description = f"{description}\n\nImage credits:\n{credits}".strip()

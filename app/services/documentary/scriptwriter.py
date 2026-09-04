@@ -21,7 +21,7 @@ import re
 from loguru import logger
 
 from app.config import config
-from app.services.documentary import llm_bridge, store
+from app.services.documentary import llm_bridge, numwords, store
 
 TARGET_WORDS_MIN = 1400
 TARGET_WORDS_MAX = 1800
@@ -245,17 +245,24 @@ def ensure_prosody(project_id: str, script: dict) -> None:
         text = str(paragraph.get("text", "")).strip()
         if not text:
             continue
-        text_hash = hashlib.md5(text.encode()).hexdigest()[:12]
+        # Digits, currency and ordinals are expanded to spoken words BEFORE
+        # the prosody model sees the text — numbers are facts, so their
+        # conversion must be deterministic. Hashing the expanded form also
+        # upgrades cached narration from before this pass existed.
+        expanded = numwords.expand_numbers(text)
+        text_hash = hashlib.md5(expanded.encode()).hexdigest()[:12]
         if (
             paragraph.get("tts_text")
             and paragraph.get("tts_source_hash") == text_hash
         ):
             continue
-        pending.append((f"p{index}", text_hash, paragraph))
+        pending.append((f"p{index}", text_hash, expanded, paragraph))
     if not pending:
         return
 
-    listing = "\n\n".join(f"[{pid}]\n{p['text']}" for pid, _, p in pending)
+    listing = "\n\n".join(
+        f"[{pid}]\n{expanded}" for pid, _, expanded, _ in pending
+    )
     prompt = f"""
 # Role: Narration Prosody Editor
 
@@ -273,6 +280,8 @@ each paragraph for natural breathing room.
 4. Use an em dash ( — ) for asides; a question mark where a sentence is
    genuinely a question.
 5. Do not overdo it — the aim is a human breathing pattern, not drama.
+6. Numbers are already written out as words for the narrator. Keep them
+   exactly as written — never convert them back to digits.
 
 ## Output
 Respond ONLY with a JSON object mapping each id to its re-punctuated text:
@@ -291,19 +300,17 @@ Respond ONLY with a JSON object mapping each id to its re-punctuated text:
         return
 
     applied = 0
-    for pid, text_hash, paragraph in pending:
+    for pid, text_hash, expanded, paragraph in pending:
         candidate = str(rewritten.get(pid, "")).strip()
-        if candidate and _word_signature(candidate) == _word_signature(
-            paragraph["text"]
-        ):
+        if candidate and _word_signature(candidate) == _word_signature(expanded):
             paragraph["tts_text"] = candidate
             paragraph["tts_source_hash"] = text_hash
             applied += 1
         else:
             # Word content changed or the paragraph is missing: narrate the
-            # original rather than risk altered facts.
+            # number-expanded original rather than risk altered facts.
             logger.warning(f"prosody rewrite rejected for {pid}")
-            paragraph["tts_text"] = paragraph["text"]
+            paragraph["tts_text"] = expanded
             paragraph["tts_source_hash"] = text_hash
     store.save_script(project_id, script)
     logger.info(f"prosody pass applied to {applied}/{len(pending)} paragraphs")
@@ -326,24 +333,27 @@ def ensure_youtube_description(
     prompt = f"""
 # Role: YouTube Copywriter for a Historical Documentary Channel
 
-Write the video description for the documentary below. This is publishing
-copy, not narration: do NOT reuse or paraphrase the film's opening lines.
+Write the video description for the documentary below. It is a TEASER, not
+a summary: someone who reads it should want to press play, not feel they
+have already watched the film.
 
 ## Rules
 1. First line: a compelling, factual hook, at most 110 characters — this
    is what viewers see before "show more". No clickbait, no all-caps.
-2. Then 2 short paragraphs (60-90 words total): what happened, and what
-   the film covers — the build-up, the disaster, the investigation, the
-   legacy. Written to intrigue, not to summarize away the whole story.
-3. Tone: respectful and measured; real people died in this event.
-4. No emojis, no hashtags, no links, no "subscribe" begging. A single
-   quiet closing line inviting viewers to watch is fine.
-5. Respond ONLY with JSON: {{"description": "..."}}
+2. Then ONE short paragraph, at most 50 words. Use at most one striking
+   fact from the film; do NOT retell the chronology, do NOT repeat the
+   numbers and details the narration reveals. Instead, raise the
+   questions the film answers (what went wrong, who was blamed, what
+   changed) and leave them unanswered.
+3. Never reuse or lightly rephrase sentences from the narration.
+4. Tone: respectful and measured; real people died in this event.
+5. No emojis, no hashtags, no links, no "subscribe" begging.
+6. Respond ONLY with JSON: {{"description": "..."}}
 
 ## Film title
 {youtube_meta.get("title", script.get("title", ""))}
 
-## Narration (for facts only — do not copy its wording)
+## Narration (context only — do not copy or summarize it)
 {narration}
 """.strip()
 

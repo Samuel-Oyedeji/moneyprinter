@@ -537,6 +537,8 @@ thumbnail_model = "google/gemini-3.1-flash-image"
 # Opening title card: event name + date over the first image.
 intro_enabled = true
 intro_font = "BeVietnamPro-Bold.ttf"
+# Narration beats longer than this many seconds show a second image.
+image_split_seconds = 18
 # Cost tracking. OpenRouter reports actual per-call cost; anything else is
 # estimated from these prices (USD). Token prices are [input, output] per
 # million tokens.
