@@ -316,41 +316,50 @@ Respond ONLY with a JSON object mapping each id to its re-punctuated text:
     logger.info(f"prosody pass applied to {applied}/{len(pending)} paragraphs")
 
 
-def ensure_youtube_description(
+def ensure_youtube_packaging(
     project_id: str, script: dict, regenerate: bool = False
-) -> str:
-    """Write a proper YouTube description from the finished film.
+) -> dict:
+    """Write the YouTube title and description as one packaging pass.
 
-    The scriptwriter's inline description tends to read like the opening of
-    the narration; this dedicated pass writes actual publishing copy — a
-    hook line, then what the film covers — and caches it on the script.
+    The scriptwriter's inline metadata tends to read like the script itself;
+    this dedicated pass writes actual publishing copy — a clickable title
+    and a teaser description, together so they don't repeat each other —
+    and caches both on the script. Returns {"title", "description"}.
     """
     youtube_meta = script.setdefault("youtube", {})
     if youtube_meta.get("description_enhanced") and not regenerate:
-        return youtube_meta.get("description", "")
+        return youtube_meta
 
     narration = full_narration_text(script)[:6000]
     prompt = f"""
 # Role: YouTube Copywriter for a Historical Documentary Channel
 
-Write the video description for the documentary below. It is a TEASER, not
-a summary: someone who reads it should want to press play, not feel they
-have already watched the film.
+Write the TITLE and DESCRIPTION for the documentary below. Both are
+publishing copy meant to earn the click — not summaries of the film.
 
-## Rules
-1. First line: a compelling, factual hook, at most 110 characters — this
-   is what viewers see before "show more". No clickbait, no all-caps.
-2. Then ONE short paragraph, at most 50 words. Use at most one striking
-   fact from the film; do NOT retell the chronology, do NOT repeat the
-   numbers and details the narration reveals. Instead, raise the
-   questions the film answers (what went wrong, who was blamed, what
-   changed) and leave them unanswered.
+## Title rules
+1. Draft several candidates internally, then return only the strongest.
+2. At most 70 characters. Specific and intriguing: a curiosity gap built
+   on a real detail beats a generic label ("The Ship That Capsized at the
+   Dock" beats "The SS Eastland Disaster"). Include the year or place only
+   when it strengthens the hook.
+3. Truthful — never promise what the film doesn't deliver. No all-caps
+   words, no emojis, no pipes ("|"), no channel branding.
+
+## Description rules
+1. First line: a factual hook, at most 110 characters, that does NOT
+   restate the title — it should add a second reason to click.
+2. Then ONE paragraph, at most 50 words. At most one striking fact; do
+   NOT retell the chronology. Raise the questions the film answers (what
+   went wrong, who was blamed, what changed) and leave them unanswered.
 3. Never reuse or lightly rephrase sentences from the narration.
 4. Tone: respectful and measured; real people died in this event.
 5. No emojis, no hashtags, no links, no "subscribe" begging.
-6. Respond ONLY with JSON: {{"description": "..."}}
 
-## Film title
+## Output
+Respond ONLY with JSON: {{"title": "...", "description": "..."}}
+
+## Working title
 {youtube_meta.get("title", script.get("title", ""))}
 
 ## Narration (context only — do not copy or summarize it)
@@ -359,18 +368,21 @@ have already watched the film.
 
     try:
         result = llm_bridge.generate_json(prompt)
+        title = str((result or {}).get("title", "")).strip()
         description = str((result or {}).get("description", "")).strip()
     except Exception as exc:
-        logger.warning(f"description generation failed, keeping existing: {exc}")
-        return youtube_meta.get("description", "")
+        logger.warning(f"packaging generation failed, keeping existing: {exc}")
+        return youtube_meta
     if not description:
-        return youtube_meta.get("description", "")
+        return youtube_meta
 
+    if title:
+        youtube_meta["title"] = title[:95]
     youtube_meta["description"] = description
     youtube_meta["description_enhanced"] = True
     store.save_script(project_id, script)
-    logger.success(f"youtube description written for {project_id}")
-    return description
+    logger.success(f"youtube packaging written for {project_id}: {title!r}")
+    return youtube_meta
 
 
 def full_narration_text(script: dict) -> str:

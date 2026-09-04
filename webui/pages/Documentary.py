@@ -324,18 +324,18 @@ def _render_library_tab():
                 with st.expander("Description & tags"):
                     if not youtube_meta.get("description_enhanced"):
                         st.caption(
-                            "⚠️ Draft description from the scriptwriter — use "
-                            "the button below to write proper publishing copy "
-                            "(also happens automatically before upload)."
+                            "⚠️ Draft title/description from the scriptwriter "
+                            "— use the button below to write proper publishing "
+                            "copy (also happens automatically before upload)."
                         )
                     st.write(youtube_meta.get("description", "") or "_none yet_")
                     st.caption(", ".join(youtube_meta.get("tags", [])))
                     if st.button(
-                        "✍️ Write proper description", key=f"lib_desc_{pid}"
+                        "✍️ Rewrite title & description", key=f"lib_desc_{pid}"
                     ):
                         costs_service.set_project(pid)
-                        with st.spinner("Writing the YouTube description…"):
-                            scriptwriter.ensure_youtube_description(
+                        with st.spinner("Writing the YouTube packaging…"):
+                            scriptwriter.ensure_youtube_packaging(
                                 pid, script, regenerate=True
                             )
                         st.rerun()

@@ -253,9 +253,9 @@ def _upload_entry(entry: dict, project: dict) -> None:
 
     costs.set_project(project_id)
     script = store.load_script(project_id) or {}
-    youtube_meta = script.get("youtube", {})
+    youtube_meta = scriptwriter.ensure_youtube_packaging(project_id, script)
     title = youtube_meta.get("title") or project["topic"]
-    description = scriptwriter.ensure_youtube_description(project_id, script)
+    description = youtube_meta.get("description", "")
     # Research sources sit above image credits: they back the narration and
     # matter more to viewers of a factual channel.
     sources = sources_block(project_id)
