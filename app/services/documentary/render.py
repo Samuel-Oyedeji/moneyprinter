@@ -11,6 +11,7 @@ existing Library page, YouTube upload and scheduling features pick it up
 without documentary-specific plumbing.
 """
 
+import functools
 import hashlib
 import json
 import os
@@ -43,9 +44,32 @@ DEFAULT_INTRO_FONT = "BeVietnamPro-Bold.ttf"
 def _ffmpeg_exe() -> str:
     if config.ffmpeg_path and os.path.isfile(config.ffmpeg_path):
         return config.ffmpeg_path
-    import imageio_ffmpeg
+    # Shared resolver: prefers a system ffmpeg over the imageio-ffmpeg bundle.
+    # The bundled static build is compiled without libfreetype, so drawtext
+    # (the intro title card) is missing there while Debian's build has it.
+    return utils.get_ffmpeg_binary()
 
-    return imageio_ffmpeg.get_ffmpeg_exe()
+
+@functools.lru_cache(maxsize=4)
+def _supports_drawtext(ffmpeg_exe: str) -> bool:
+    """Whether this ffmpeg build has the freetype-backed drawtext filter."""
+    try:
+        result = subprocess.run(
+            [ffmpeg_exe, "-hide_banner", "-filters"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception as exc:
+        logger.warning(f"failed to probe ffmpeg filters ({ffmpeg_exe}): {exc}")
+        return False
+    if result.returncode != 0:
+        return False
+    return any(
+        line.split()[1:2] == ["drawtext"]
+        for line in result.stdout.splitlines()
+        if line.strip()
+    )
 
 
 def _run_ffmpeg(args: list[str], context: str) -> None:
@@ -187,6 +211,40 @@ def _intro_texts(project: dict, script: dict) -> tuple[str, str]:
     return title, date_line
 
 
+def _title_card_overlay(
+    title: str, date_line: str, font: str, output_dir: str
+) -> str:
+    """Transparent PNG of the intro type, for ffmpeg builds without drawtext.
+
+    The imageio-ffmpeg bundled binary (and some minimal system builds) ship
+    without libfreetype, so `drawtext` is simply absent and the intro segment
+    fails with "No such filter: 'drawtext'". Compositing the same two lines
+    with Pillow and overlaying them keeps the card identical everywhere.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    canvas = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+
+    def centered(text: str, size: int, top: int, alpha: int) -> None:
+        pil_font = ImageFont.truetype(font, size)
+        width = draw.textlength(text, font=pil_font)
+        draw.text(
+            ((VIDEO_WIDTH - width) / 2, top),
+            text,
+            font=pil_font,
+            fill=(255, 255, 255, alpha),
+        )
+
+    centered(title, 88, VIDEO_HEIGHT // 2 - 110, 255)
+    if date_line:
+        centered(date_line, 40, VIDEO_HEIGHT // 2 + 30, 230)
+
+    overlay_path = os.path.join(output_dir, "intro-text.png")
+    canvas.save(overlay_path)
+    return overlay_path
+
+
 def _render_intro_segment(
     project: dict, script: dict, background_image: str, output_dir: str
 ) -> str:
@@ -196,45 +254,57 @@ def _render_intro_segment(
     if not os.path.isfile(font):
         raise RuntimeError(f"intro font not found: {font}")
 
-    # drawtext escaping is two-layered (filtergraph + option parser) and
-    # brittle for titles with apostrophes/colons; textfile= sidesteps it.
-    title_file = os.path.join(output_dir, "intro-title.txt")
-    with open(title_file, "w", encoding="utf-8") as f:
-        f.write(title)
-    date_file = os.path.join(output_dir, "intro-date.txt")
-    with open(date_file, "w", encoding="utf-8") as f:
-        f.write(date_line)
-
     fade_out_start = INTRO_DURATION - 0.8
-    draw_common = f"fontfile='{font}':fontcolor=white:x=(w-text_w)/2"
-    filters = (
+    background = (
         f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase,"
         f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT},"
-        f"boxblur=10,eq=brightness=-0.28:saturation=0.65,"
-        f"drawtext={draw_common}:y=(h/2)-110:fontsize=88:"
-        f"textfile='{title_file}',"
+        f"boxblur=10,eq=brightness=-0.28:saturation=0.65"
     )
-    if date_line:
-        filters += (
-            f"drawtext={draw_common}:y=(h/2)+30:fontsize=40:alpha=0.9:"
-            f"textfile='{date_file}',"
-        )
-    filters += (
+    closing = (
         f"fade=t=in:st=0:d=0.8,fade=t=out:st={fade_out_start:.2f}:d=0.8,"
         f"format=yuv420p,fps={FPS}"
     )
 
+    if _supports_drawtext(_ffmpeg_exe()):
+        # drawtext escaping is two-layered (filtergraph + option parser) and
+        # brittle for titles with apostrophes/colons; textfile= sidesteps it.
+        title_file = os.path.join(output_dir, "intro-title.txt")
+        with open(title_file, "w", encoding="utf-8") as f:
+            f.write(title)
+        date_file = os.path.join(output_dir, "intro-date.txt")
+        with open(date_file, "w", encoding="utf-8") as f:
+            f.write(date_line)
+
+        draw_common = f"fontfile='{font}':fontcolor=white:x=(w-text_w)/2"
+        text_filters = (
+            f"drawtext={draw_common}:y=(h/2)-110:fontsize=88:"
+            f"textfile='{title_file}'"
+        )
+        if date_line:
+            text_filters += (
+                f",drawtext={draw_common}:y=(h/2)+30:fontsize=40:alpha=0.9:"
+                f"textfile='{date_file}'"
+            )
+        inputs = ["-loop", "1", "-i", background_image]
+        graph = ["-vf", f"{background},{text_filters},{closing}"]
+    else:
+        logger.info("ffmpeg has no drawtext filter; drawing the intro card with PIL")
+        overlay = _title_card_overlay(title, date_line, font, output_dir)
+        inputs = ["-loop", "1", "-i", background_image, "-i", overlay]
+        graph = [
+            "-filter_complex",
+            f"[0:v]{background}[bg];[bg][1:v]overlay=0:0[card];[card]{closing}[v]",
+            "-map",
+            "[v]",
+        ]
+
     intro_path = os.path.join(output_dir, "seg-intro.mp4")
     _run_ffmpeg(
         [
-            "-loop",
-            "1",
-            "-i",
-            background_image,
+            *inputs,
             "-t",
             f"{INTRO_DURATION}",
-            "-vf",
-            filters,
+            *graph,
             "-r",
             str(FPS),
             "-c:v",
