@@ -17,6 +17,8 @@ generated at publish time.
 import json
 import os
 import re
+import time
+from collections.abc import Callable
 from urllib.parse import urlparse
 
 import requests
@@ -30,7 +32,16 @@ CANDIDATES_PER_PROVIDER = 2
 MAX_CANDIDATES_PER_CUE = 6
 RESCUE_SCORE_THRESHOLD = 4.0
 DOWNLOAD_TIMEOUT = 30
+# Searches are cheap to abandon — three other providers cover the cue — so
+# they get a tighter deadline than image downloads.
+SEARCH_TIMEOUT = 15
 DOWNLOAD_BYTE_CAP = 15 * 1024 * 1024
+# A provider that keeps timing out costs SEARCH_TIMEOUT per cue for the rest
+# of the run (a 50-cue film with one dead provider burns ~25 idle minutes),
+# so it is dropped for the remainder of the sourcing pass.
+PROVIDER_FAILURE_LIMIT = 3
+
+OPENVERSE_API = "https://api.openverse.org/v1"
 
 _USER_AGENT = (
     "MoneyPrinterTurbo-Documentary/1.0 "
@@ -61,6 +72,31 @@ def _optional_api_key(cfg_key: str) -> str:
     return material.get_api_key(cfg_key)
 
 
+# Consecutive search failures per provider, reset at the start of each pass.
+_provider_failures: dict[str, int] = {}
+
+
+def reset_provider_health() -> None:
+    _provider_failures.clear()
+
+
+def _provider_enabled(provider: str) -> bool:
+    return _provider_failures.get(provider, 0) < PROVIDER_FAILURE_LIMIT
+
+
+def _note_provider_failure(provider: str) -> None:
+    _provider_failures[provider] = _provider_failures.get(provider, 0) + 1
+    if not _provider_enabled(provider):
+        logger.warning(
+            f"{provider} failed {_provider_failures[provider]} searches in a "
+            f"row; skipping it for the rest of this sourcing pass"
+        )
+
+
+def _note_provider_success(provider: str) -> None:
+    _provider_failures.pop(provider, None)
+
+
 def _get(url: str, **kwargs):
     kwargs.setdefault("timeout", DOWNLOAD_TIMEOUT)
     headers = kwargs.pop("headers", {})
@@ -82,11 +118,17 @@ def search_wikimedia(query: str, count: int) -> list[dict]:
         "iiurlwidth": 1920,
     }
     try:
-        response = _get("https://commons.wikimedia.org/w/api.php", params=params)
+        response = _get(
+            "https://commons.wikimedia.org/w/api.php",
+            params=params,
+            timeout=SEARCH_TIMEOUT,
+        )
         response.raise_for_status()
         pages = (response.json().get("query") or {}).get("pages") or {}
+        _note_provider_success("wikimedia")
     except Exception as exc:
         logger.warning(f"wikimedia search failed for {query!r}: {exc}")
+        _note_provider_failure("wikimedia")
         return []
 
     results = []
@@ -122,6 +164,56 @@ def search_wikimedia(query: str, count: int) -> list[dict]:
     return results
 
 
+# (token, expiry timestamp) for the Openverse client-credentials grant.
+_openverse_token: tuple[str, float] = ("", 0.0)
+
+
+def _openverse_headers() -> dict:
+    """Bearer header for Openverse, or {} when no credentials are configured.
+
+    Anonymous Openverse traffic is rate-limited hard enough that a sourcing
+    pass over dozens of cues gets throttled into read timeouts. Registering
+    an application (POST /v1/auth_tokens/register) raises the ceiling
+    substantially; the token it yields lasts ~12h, so it is cached.
+    """
+    global _openverse_token
+    client_id = str(config.documentary.get("openverse_client_id", "") or "").strip()
+    client_secret = str(
+        config.documentary.get("openverse_client_secret", "") or ""
+    ).strip()
+    if not client_id or not client_secret:
+        return {}
+
+    token, expires_at = _openverse_token
+    if token and time.time() < expires_at:
+        return {"Authorization": f"Bearer {token}"}
+
+    try:
+        response = requests.post(
+            f"{OPENVERSE_API}/auth_tokens/token/",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": client_secret,
+            },
+            timeout=SEARCH_TIMEOUT,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        token = str(payload.get("access_token", ""))
+        if not token:
+            raise ValueError("no access_token in the response")
+        # Renew a minute early so a request never rides an expiring token.
+        expiry = float(payload.get("expires_in", 3600)) - 60
+    except Exception as exc:
+        logger.warning(f"openverse token request failed: {exc}")
+        return {}
+
+    _openverse_token = (token, time.time() + expiry)
+    logger.info("openverse authenticated with the configured client credentials")
+    return {"Authorization": f"Bearer {token}"}
+
+
 def search_openverse(query: str, count: int) -> list[dict]:
     params = {
         "q": query,
@@ -130,11 +222,18 @@ def search_openverse(query: str, count: int) -> list[dict]:
         "license_type": "commercial",
     }
     try:
-        response = _get("https://api.openverse.org/v1/images/", params=params)
+        response = _get(
+            f"{OPENVERSE_API}/images/",
+            params=params,
+            headers=_openverse_headers(),
+            timeout=SEARCH_TIMEOUT,
+        )
         response.raise_for_status()
         items = response.json().get("results") or []
+        _note_provider_success("openverse")
     except Exception as exc:
         logger.warning(f"openverse search failed for {query!r}: {exc}")
+        _note_provider_failure("openverse")
         return []
 
     results = []
@@ -168,11 +267,14 @@ def search_pexels_photos(query: str, count: int) -> list[dict]:
             "https://api.pexels.com/v1/search",
             params={"query": query, "per_page": count, "orientation": "landscape"},
             headers={"Authorization": api_key},
+            timeout=SEARCH_TIMEOUT,
         )
         response.raise_for_status()
         photos = response.json().get("photos") or []
+        _note_provider_success("pexels")
     except Exception as exc:
         logger.warning(f"pexels photo search failed for {query!r}: {exc}")
+        _note_provider_failure("pexels")
         return []
 
     return [
@@ -206,11 +308,14 @@ def search_pixabay_photos(query: str, count: int) -> list[dict]:
                 "per_page": max(count, 3),
                 "safesearch": "true",
             },
+            timeout=SEARCH_TIMEOUT,
         )
         response.raise_for_status()
         hits = response.json().get("hits") or []
+        _note_provider_success("pixabay")
     except Exception as exc:
         logger.warning(f"pixabay photo search failed for {query!r}: {exc}")
+        _note_provider_failure("pixabay")
         return []
 
     return [
@@ -297,12 +402,17 @@ def download_candidate(project_id: str, key: str, index: int, candidate: dict) -
 
 def gather_candidates_for_cue(project_id: str, key: str, queries: dict) -> list[dict]:
     """Search all providers for one cue and download what succeeds."""
-    found = (
-        search_wikimedia(queries["archival"], CANDIDATES_PER_PROVIDER)
-        + search_openverse(queries["archival"], CANDIDATES_PER_PROVIDER)
-        + search_pexels_photos(queries["stock"], CANDIDATES_PER_PROVIDER)
-        + search_pixabay_photos(queries["stock"], CANDIDATES_PER_PROVIDER)
+    providers = (
+        ("wikimedia", search_wikimedia, "archival"),
+        ("openverse", search_openverse, "archival"),
+        ("pexels", search_pexels_photos, "stock"),
+        ("pixabay", search_pixabay_photos, "stock"),
     )
+    found: list[dict] = []
+    for name, search, lane in providers:
+        if not _provider_enabled(name):
+            continue
+        found += search(queries[lane], CANDIDATES_PER_PROVIDER)
     candidates = []
     for candidate in found:
         if len(candidates) >= MAX_CANDIDATES_PER_CUE:
@@ -462,7 +572,9 @@ def build_items_from_script(script: dict) -> list[dict]:
     return items
 
 
-def run_image_sourcing(project: dict) -> dict:
+def run_image_sourcing(
+    project: dict, on_progress: Callable[[str], None] | None = None
+) -> dict:
     """Source candidates for every paragraph cue and persist images.json."""
     project_id = project["project_id"]
     script = store.load_script(project_id)
@@ -471,9 +583,17 @@ def run_image_sourcing(project: dict) -> dict:
 
     topic = project.get("topic", "")
     items = build_items_from_script(script)
+    reset_provider_health()
     planned = plan_image_queries(topic, items)
 
-    for item in items:
+    for index, item in enumerate(items, start=1):
+        if on_progress is not None:
+            # This stage is the long pole of an autopilot run: without a cue
+            # counter the page looks frozen for twenty minutes or more.
+            try:
+                on_progress(f"Sourcing images — cue {index}/{len(items)}…")
+            except Exception as exc:
+                logger.warning(f"image progress callback failed: {exc}")
         item["queries"] = _queries_for(item, planned)
         item["candidates"] = gather_candidates_for_cue(
             project_id, item["key"], item["queries"]

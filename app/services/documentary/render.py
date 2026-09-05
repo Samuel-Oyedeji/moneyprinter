@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import subprocess
+from collections.abc import Callable
 
 from loguru import logger
 
@@ -445,7 +446,18 @@ def _publish_to_task_library(
         json.dump(sidecar, f, ensure_ascii=False, indent=2)
 
 
-def run_render(project: dict) -> str:
+def _report(on_progress: Callable[[str], None] | None, message: str) -> None:
+    if on_progress is None:
+        return
+    try:
+        on_progress(message)
+    except Exception as exc:
+        logger.warning(f"render progress callback failed: {exc}")
+
+
+def run_render(
+    project: dict, on_progress: Callable[[str], None] | None = None
+) -> str:
     """Render the approved script + selected images into the final video."""
     project_id = project["project_id"]
     script = store.load_script(project_id)
@@ -458,6 +470,7 @@ def run_render(project: dict) -> str:
     paragraphs = _collect_paragraphs(script, images)
     logger.info(f"rendering {project_id}: {len(paragraphs)} segments")
 
+    _report(on_progress, f"Rendering — narrating {len(paragraphs)} beats…")
     synthesize_paragraphs(project_id, paragraphs)
     _measure_durations(paragraphs)
     total = sum(p["display_seconds"] for p in paragraphs)
@@ -491,10 +504,14 @@ def run_render(project: dict) -> str:
 
     for index, (chunk_key, image_path, duration) in enumerate(chunks):
         logger.info(f"segment {index + 1}/{len(chunks)} ({chunk_key})")
+        _report(
+            on_progress, f"Rendering — segment {index + 1}/{len(chunks)}…"
+        )
         segment_paths.append(
             _render_segment(project_id, index, image_path, duration)
         )
 
+    _report(on_progress, "Rendering — stitching segments and mixing audio…")
     visual_path = _concat_segments(project_id, segment_paths)
     narration_path = _build_narration_track(
         project_id, paragraphs, lead_in_seconds=intro_seconds

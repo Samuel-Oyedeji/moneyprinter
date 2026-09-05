@@ -101,7 +101,9 @@ elif serpapi_quota and (serpapi_quota.get("left") or 0) < research_service.QUOTA
     )
 
 # --------------------------------------------------------- research settings
-with st.expander("🔎 Research settings (SerpApi)", expanded=not serpapi_ready):
+with st.expander(
+    "🔎 Research settings (SerpApi · Openverse)", expanded=not serpapi_ready
+):
     key_col, save_col = st.columns([4, 1], vertical_alignment="bottom")
     serpapi_key = key_col.text_input(
         "SerpApi API key",
@@ -146,6 +148,33 @@ with st.expander("🔎 Research settings (SerpApi)", expanded=not serpapi_ready)
     if refresh_col.button("🔄 Refresh quota"):
         _refresh_serpapi_quota()
         st.rerun()
+
+    st.divider()
+    st.caption(
+        "**Openverse** (image sourcing) works without credentials, but "
+        "anonymous requests are rate-limited hard enough that a long film "
+        "gets throttled into timeouts — every one costs 15 seconds of a "
+        "sourcing run. Register an application at "
+        "https://api.openverse.org/v1/auth_tokens/register/ and paste the "
+        "client id and secret it returns."
+    )
+    ov_id_col, ov_secret_col, ov_save_col = st.columns(
+        [2, 2, 1], vertical_alignment="bottom"
+    )
+    openverse_id = ov_id_col.text_input(
+        "Openverse client id",
+        value=str(config.documentary.get("openverse_client_id", "") or ""),
+    )
+    openverse_secret = ov_secret_col.text_input(
+        "Openverse client secret",
+        value=str(config.documentary.get("openverse_client_secret", "") or ""),
+        type="password",
+    )
+    if ov_save_col.button("💾 Save"):
+        config.documentary["openverse_client_id"] = openverse_id.strip()
+        config.documentary["openverse_client_secret"] = openverse_secret.strip()
+        config.save_config()
+        st.success("Openverse credentials saved.")
 
 # ------------------------------------------------------------ voice settings
 with st.expander("🎙 Narration voice settings"):
@@ -606,10 +635,23 @@ if project.get("user_notes"):
 
 
 def _run_with_spinner(label: str, fn, *args):
+    """Run a pipeline call, showing the stage it is actually in.
+
+    Autopilot chains research → script → images → render inside this one
+    call, so a fixed label would claim "researching" for the whole run. The
+    pipeline reports each stage through on_stage and the status box updates
+    live while the script is still blocked here.
+    """
+    status = st.status(label, expanded=True)
+
+    def on_stage(message: str) -> None:
+        status.update(label=message)
+
     try:
-        with st.spinner(label):
-            fn(*args)
+        fn(*args, on_stage=on_stage)
+        status.update(state="complete")
     except Exception as exc:
+        status.update(state="error")
         st.error(f"{exc}")
     st.rerun()
 
@@ -649,6 +691,8 @@ elif status == store.STATUS_FAILED:
 elif status == store.STATUS_FACTSHEET_REVIEW:
     factsheet = store.load_factsheet(selected_id) or {}
     st.subheader("Fact sheet review")
+    for warning in factsheet.get("research_warnings") or []:
+        st.warning(warning)
     if factsheet.get("summary"):
         st.markdown(f"> {factsheet['summary']}")
 

@@ -8,7 +8,7 @@ claim carries its source URLs and a confidence level. The scriptwriter is
 then constrained to that fact sheet.
 """
 
-import re
+import time
 from urllib.parse import urlparse
 
 import requests
@@ -30,6 +30,12 @@ MAX_SOURCE_CHARS = 9000
 MIN_SOURCE_CHARS = 300
 FETCH_TIMEOUT = 20
 FETCH_BYTE_CAP = 3 * 1024 * 1024
+# Search results run to ~140 unique URLs. Walking all of them at FETCH_TIMEOUT
+# each is 45+ minutes of a stalled research stage on a slow network, and the
+# useful sources are near the top of the ranking anyway — so the walk stops on
+# whichever bound is hit first.
+MAX_FETCH_ATTEMPTS = 30
+FETCH_BUDGET_SECONDS = 240
 
 _USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -189,7 +195,7 @@ historical event in Nigeria / West Africa for a documentary.
     return merged[: MAX_QUERIES + len(staples)]
 
 
-def _serpapi_search(query: str, engine: str) -> list[dict]:
+def _serpapi_search(query: str, engine: str, stats: dict | None = None) -> list[dict]:
     params = {
         "engine": engine,
         "q": query,
@@ -215,7 +221,12 @@ def _serpapi_search(query: str, engine: str) -> list[dict]:
     except SerpApiQuotaError:
         raise
     except Exception as exc:
+        # A dropped search is silent data loss: the fact sheet still gets
+        # built, just from a fraction of the planned coverage. Count it so
+        # the run can say so instead of quietly degrading.
         logger.warning(f"serpapi search failed for {query!r} ({engine}): {exc}")
+        if stats is not None:
+            stats["searches_failed"] = stats.get("searches_failed", 0) + 1
         return []
 
     results = data.get("organic_results") or data.get("news_results") or []
@@ -250,11 +261,13 @@ def _score(candidate: dict) -> float:
     return domain_boost * (0.5 + position_score)
 
 
-def gather_candidates(queries: list[str]) -> list[dict]:
+def gather_candidates(queries: list[str], stats: dict | None = None) -> list[dict]:
     seen: dict[str, dict] = {}
     for query in queries:
         for engine in ("google", "google_news"):
-            for item in _serpapi_search(query, engine):
+            if stats is not None:
+                stats["searches"] = stats.get("searches", 0) + 1
+            for item in _serpapi_search(query, engine, stats):
                 if _domain(item["url"]) in _BLOCKED_DOMAINS:
                     continue
                 key = item["url"].split("#")[0].rstrip("/")
@@ -294,15 +307,39 @@ def fetch_source(candidate: dict) -> dict | None:
     }
 
 
-def collect_sources(queries: list[str], max_sources: int = MAX_SOURCES) -> list[dict]:
-    sources = []
-    for candidate in gather_candidates(queries):
+def collect_sources(
+    queries: list[str],
+    max_sources: int = MAX_SOURCES,
+    stats: dict | None = None,
+) -> list[dict]:
+    """Fetch the best-ranked candidates until enough sources, or a bound, hit."""
+    sources: list[dict] = []
+    deadline = time.monotonic() + FETCH_BUDGET_SECONDS
+    attempts = 0
+    candidates = gather_candidates(queries, stats)
+    for candidate in candidates:
         if len(sources) >= max_sources:
             break
+        if attempts >= MAX_FETCH_ATTEMPTS:
+            logger.warning(
+                f"stopped fetching after {attempts} candidates with "
+                f"{len(sources)} usable sources"
+            )
+            break
+        if time.monotonic() > deadline:
+            logger.warning(
+                f"source fetching hit the {FETCH_BUDGET_SECONDS}s budget with "
+                f"{len(sources)} usable sources"
+            )
+            break
+        attempts += 1
         source = fetch_source(candidate)
         if source:
             sources.append(source)
             logger.info(f"collected source: {source['domain']} - {source['title']}")
+    if stats is not None:
+        stats["candidates"] = len(candidates)
+        stats["fetch_attempts"] = attempts
     return sources
 
 
@@ -401,6 +438,27 @@ def _attach_fact_ids(factsheet: dict, sources: list[dict]) -> dict:
     return factsheet
 
 
+def _research_warnings(stats: dict, sources: list[dict]) -> list[str]:
+    """Human-readable notes about coverage this run did not manage to get."""
+    warnings = []
+    failed = stats.get("searches_failed", 0)
+    planned = stats.get("searches", 0)
+    if failed:
+        warnings.append(
+            f"{failed} of {planned} web searches failed (SerpApi was slow or "
+            f"unreachable), so this fact sheet was built from partial search "
+            f"coverage. Re-running research may find more."
+        )
+    attempts = stats.get("fetch_attempts", 0)
+    if attempts >= MAX_FETCH_ATTEMPTS and len(sources) < MAX_SOURCES:
+        warnings.append(
+            f"Only {len(sources)} of {MAX_SOURCES} sources could be fetched "
+            f"within {attempts} attempts; the rest timed out or were "
+            f"unreadable."
+        )
+    return warnings
+
+
 def run_research(project: dict) -> dict:
     """Full research pass: plan queries, collect sources, distill fact sheet.
 
@@ -414,7 +472,8 @@ def run_research(project: dict) -> dict:
     queries = plan_queries(topic, user_notes)
     logger.info(f"research queries for {project_id}: {queries}")
 
-    sources = collect_sources(queries)
+    stats: dict = {}
+    sources = collect_sources(queries, stats=stats)
     if not sources:
         raise RuntimeError(
             "research found no usable web sources; check the SerpApi key, "
@@ -430,12 +489,15 @@ def run_research(project: dict) -> dict:
 
     factsheet = _attach_fact_ids(factsheet, sources)
     factsheet["queries"] = queries
+    factsheet["research_warnings"] = _research_warnings(stats, sources)
     fact_count = sum(len(v) for v in factsheet["sections"].values())
     if fact_count == 0:
         raise RuntimeError(
             "the fact sheet came back empty; the collected sources likely do "
             "not cover this topic. Try refining the topic or adding notes."
         )
+    for warning in factsheet["research_warnings"]:
+        logger.warning(f"research warning for {project_id}: {warning}")
     logger.success(
         f"fact sheet for {project_id}: {fact_count} facts from "
         f"{len(sources)} sources"

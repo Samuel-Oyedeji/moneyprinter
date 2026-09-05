@@ -512,6 +512,12 @@ webhook_url = ""
 # Long-form documentary pipeline (still images + narration).
 # SerpApi key for the web research stage: https://serpapi.com/manage-api-key
 serpapi_api_key = ""
+# Optional Openverse application credentials for image sourcing. Anonymous
+# Openverse requests are rate-limited hard enough that a long film gets
+# throttled into read timeouts; register an application at
+# https://api.openverse.org/v1/auth_tokens/register/ to raise the ceiling.
+openverse_client_id = ""
+openverse_client_secret = ""
 # LLM override for research and scriptwriting. These stages need a strong
 # model; leave llm_provider empty to fall back to the global [app] provider.
 llm_provider = "openrouter"
