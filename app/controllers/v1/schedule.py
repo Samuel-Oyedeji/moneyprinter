@@ -119,6 +119,36 @@ def delete_schedule(request: Request, entry_id: str = Path(...)):
 
 
 @router.post(
+    "/schedules/{entry_id}/reupload",
+    response_model=ScheduleEntryResponse,
+    summary="Upload an entry's already-rendered videos again, without regenerating",
+)
+def reupload_schedule(request: Request, entry_id: str = Path(...)):
+    """Finish an entry that generated fine but failed to reach YouTube.
+
+    Only the videos that never got a YouTube id are sent, so a retry after a
+    partial upload (daily quota running out halfway) cannot duplicate what
+    is already on the channel.
+    """
+    request_id = base.get_task_id(request)
+    try:
+        entry = schedule_service.reupload_entry(entry_id)
+    except KeyError:
+        raise HttpException(
+            task_id=request_id, status_code=404, message=f"{request_id}: entry not found"
+        )
+    except ValueError as e:
+        raise HttpException(
+            task_id=request_id, status_code=409, message=f"{request_id}: {str(e)}"
+        )
+    except Exception as e:
+        raise HttpException(
+            task_id=request_id, status_code=500, message=f"{request_id}: {str(e)}"
+        )
+    return utils.get_response(200, entry)
+
+
+@router.post(
     "/schedules/{entry_id}/duplicate",
     response_model=ScheduleListResponse,
     summary="Duplicate an entry onto other dates",

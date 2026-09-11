@@ -7,7 +7,7 @@ survives container restarts (unlike the in-memory task list).
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from glob import glob
 
 import streamlit as st
@@ -18,6 +18,8 @@ if root_dir in sys.path:
     sys.path.remove(root_dir)
 sys.path.insert(0, root_dir)
 
+from app.services import schedule as schedule_service
+from app.services.youtube_upload import youtube_upload_service
 from app.utils import utils
 
 st.set_page_config(page_title="Video Library", page_icon="🎞️", layout="wide")
@@ -47,8 +49,93 @@ st.page_link("Main.py", label="Back to generator", icon=":material/arrow_back:")
 st.title("🎞️ Video Library")
 st.caption(
     "Every generated final video, newest first - including videos created "
-    "by the scheduler and API. Use the player's ⋮ menu to download."
+    "by the scheduler and API. Use the player's ⋮ menu to download, or "
+    "upload any video here straight to YouTube."
 )
+
+
+def _upload_panel(video: dict) -> None:
+    """Upload one already-rendered video to YouTube, no regeneration.
+
+    The safety net for a video whose scheduled upload failed on something
+    unrelated to the file itself - daily quota exhausted, expired token -
+    and for videos orphaned by an older retry that rebuilt from scratch.
+    """
+    key = f"{video['task_id']}_{video['filename']}"
+    with st.popover("⬆️ Upload to YouTube", use_container_width=True):
+        if not youtube_upload_service.is_configured():
+            st.warning(
+                "YouTube is not connected. Run `python youtube_auth.py` once "
+                "and set `youtube.enabled = true` in config.toml."
+            )
+            return
+
+        st.caption(
+            "Uploads this exact file as a private video. Nothing is "
+            "regenerated."
+        )
+        title = st.text_input(
+            "Title",
+            value=(video["subject"] or video["script"][:80] or video["task_id"])[:100],
+            key=f"yt_title_{key}",
+        )
+        description = st.text_area(
+            "Description", value=video["script"][:500], height=100,
+            key=f"yt_desc_{key}",
+        )
+        tags_text = st.text_input(
+            "Tags (comma separated)", value="", key=f"yt_tags_{key}"
+        )
+        schedule_publish = st.checkbox(
+            "Schedule the publish time", key=f"yt_sched_{key}",
+            help="Leave off to keep it a private draft you publish by hand.",
+        )
+        publish_at = None
+        if schedule_publish:
+            date_col, time_col = st.columns(2)
+            publish_date = date_col.date_input(
+                "Publish date", value=date.today() + timedelta(days=1),
+                key=f"yt_date_{key}",
+            )
+            publish_time = time_col.time_input(
+                "Publish time", value=time(12, 0), key=f"yt_time_{key}",
+            )
+            # 复用排期页的时区换算，保证手动上传和自动排期的发布时间一致。
+            publish_at = schedule_service._compute_publish_at(
+                {
+                    "date": publish_date.isoformat(),
+                    "post_time": publish_time.strftime("%H:%M"),
+                    "id": key,
+                }
+            )
+            if publish_at is None:
+                st.warning(
+                    "That time is in the past - it will upload as a plain "
+                    "private draft instead."
+                )
+
+        if st.button("Upload now", type="primary", key=f"yt_go_{key}"):
+            tags = [t.strip() for t in tags_text.split(",") if t.strip()]
+            thumbnail_path = schedule_service._extract_thumbnail(
+                video["path"], os.path.splitext(video["path"])[0] + "-thumbnail.jpg"
+            )
+            with st.spinner("Uploading to YouTube…"):
+                result = youtube_upload_service.upload_video(
+                    video_path=video["path"],
+                    title=title,
+                    description=description,
+                    tags=tags,
+                    thumbnail_path=thumbnail_path,
+                    publish_at=publish_at,
+                )
+            if result.get("success"):
+                video_id = result["video_id"]
+                st.success(
+                    f"Uploaded: [studio.youtube.com]"
+                    f"(https://studio.youtube.com/video/{video_id}/edit)"
+                )
+            else:
+                st.error(result.get("error", "upload failed"))
 
 
 def _load_task_meta(task_dir: str) -> dict:
@@ -130,6 +217,7 @@ for row_start in range(0, len(shown), columns_per_row):
             )
             st.caption(f"{created} · {video['size_mb']:.0f} MB")
             st.video(video["path"])
+            _upload_panel(video)
             with st.popover("🗑 Delete files", use_container_width=True):
                 st.caption(
                     "Permanently deletes this task's folder from the server "

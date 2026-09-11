@@ -52,6 +52,7 @@ st.markdown(
 .cal-pill .cal-meta { opacity: 0.8; font-size: 0.66rem; }
 .pill-pending    { background: #b45309; }
 .pill-generating { background: #2563eb; }
+.pill-uploading  { background: #7c3aed; }
 .pill-done       { background: #15803d; }
 .pill-failed     { background: #b91c1c; }
 .status-chip { display: inline-block; font-size: 0.72rem; font-weight: 600;
@@ -82,6 +83,7 @@ st.caption(
 _STATUS_LABELS = {
     schedule_service.STATUS_PENDING: "Pending",
     schedule_service.STATUS_GENERATING: "Generating…",
+    schedule_service.STATUS_UPLOADING: "Uploading…",
     schedule_service.STATUS_DONE: "Done",
     schedule_service.STATUS_FAILED: "Failed",
 }
@@ -642,6 +644,20 @@ for entry_date_str in dates_in_order:
                     st.caption(" · ".join(meta_bits))
                     if status == schedule_service.STATUS_FAILED and entry.get("error"):
                         st.error(entry["error"][:300], icon="⚠️")
+                    if status == schedule_service.STATUS_FAILED:
+                        pending = schedule_service.pending_uploads(entry)
+                        if pending:
+                            st.info(
+                                f"The video{'s' if len(pending) > 1 else ''} "
+                                f"rendered fine and {'are' if len(pending) > 1 else 'is'} "
+                                f"still on disk - only the upload failed. "
+                                f"Re-upload sends {len(pending)} file"
+                                f"{'s' if len(pending) > 1 else ''} without "
+                                "regenerating anything.",
+                                icon="⬆️",
+                            )
+                        elif entry.get("failed_stage") == schedule_service.STAGE_GENERATE:
+                            st.caption("Failed during generation - retry rebuilds it.")
                     if entry.get("youtube_video_ids"):
                         links = " · ".join(
                             f"[video {i + 1}](https://studio.youtube.com/video/{vid}/edit)"
@@ -649,30 +665,42 @@ for entry_date_str in dates_in_order:
                         )
                         st.caption(f"▶️ On YouTube (private): {links}")
                 with action_col:
-                    actions = ["copy"]
+                    busy = status in schedule_service.BUSY_STATUSES
+                    actions = []
                     if status == schedule_service.STATUS_FAILED:
-                        actions.insert(0, "retry")
+                        # 只是上传失败时，重新上传排在重建前面：它更快、
+                        # 更便宜，也不会在频道上留下重复视频。
+                        if schedule_service.can_reupload(entry):
+                            actions.append("reupload")
+                        actions.append("retry")
                     # 生成中的条目正常不可改；但进程中途死掉会让它永远卡住，
                     # 所以始终留一个手动解锁的出口。
-                    if status == schedule_service.STATUS_GENERATING:
-                        actions.insert(0, "unstick")
-                    if status != schedule_service.STATUS_GENERATING:
+                    if busy:
+                        actions.append("unstick")
+                    actions.append("copy")
+                    if not busy:
                         actions.append("delete")
-                    # 每个卡片最多三个操作，两列自适应；奇数个时最后一个占整行。
-                    button_row = st.columns(2) if len(actions) > 1 else [st.container()]
 
-                    def _slot(index: int):
-                        if len(actions) == 3 and index == 2:
-                            return st.container()
-                        return button_row[index % len(button_row)]
+                    # 每行两个按钮；落单的最后一个占满整行。
+                    slots = {}
+                    for row_start_index in range(0, len(actions), 2):
+                        row = actions[row_start_index : row_start_index + 2]
+                        columns = (
+                            st.columns(2) if len(row) == 2 else [st.container()]
+                        )
+                        for action_name, column in zip(row, columns):
+                            slots[action_name] = column
+
+                    def _slot(name: str):
+                        return slots[name]
 
                     if "unstick" in actions:
-                        with _slot(actions.index("unstick")):
+                        with _slot("unstick"):
                             if st.button(
                                 "♻️ Reset", key=f"reset_{entry['id']}",
                                 use_container_width=True,
                                 help=(
-                                    "Stuck in generating? The run was interrupted. "
+                                    f"Stuck in {status}? The run was interrupted. "
                                     "Reset it to pending so the next run picks it "
                                     "up again. If it really is still rendering, "
                                     "resetting makes it regenerate from scratch."
@@ -680,17 +708,52 @@ for entry_date_str in dates_in_order:
                             ):
                                 schedule_service.reset_entry(entry["id"])
                                 st.rerun()
-                    if "retry" in actions:
-                        with _slot(actions.index("retry")):
+                    if "reupload" in actions:
+                        with _slot("reupload"):
                             if st.button(
-                                "🔄 Retry", key=f"retry_{entry['id']}",
+                                "⬆️ Re-upload", key=f"reupload_{entry['id']}",
+                                type="primary", use_container_width=True,
+                                help=(
+                                    "Send the already-rendered video(s) to "
+                                    "YouTube again. Nothing is regenerated and "
+                                    "videos that already uploaded are skipped."
+                                ),
+                            ):
+                                try:
+                                    with st.spinner("Uploading to YouTube…"):
+                                        updated = schedule_service.reupload_entry(
+                                            entry["id"]
+                                        )
+                                except Exception as exc:
+                                    st.error(f"Re-upload failed: {exc}")
+                                else:
+                                    if updated.get("status") == (
+                                        schedule_service.STATUS_DONE
+                                    ):
+                                        st.success("Uploaded.")
+                                    else:
+                                        st.error(
+                                            updated.get("error", "upload failed")
+                                        )
+                                    st.rerun()
+                    if "retry" in actions:
+                        with _slot("retry"):
+                            rebuild = schedule_service.can_reupload(entry)
+                            if st.button(
+                                "🔄 Rebuild" if rebuild else "🔄 Retry",
+                                key=f"retry_{entry['id']}",
                                 use_container_width=True,
+                                help=(
+                                    "Regenerate the video from scratch, then "
+                                    "upload. Use this only if the video itself "
+                                    "is wrong - it costs a full generation."
+                                ) if rebuild else None,
                             ):
                                 schedule_service.update_entry(
                                     entry["id"], status=schedule_service.STATUS_PENDING
                                 )
                                 st.rerun()
-                    with _slot(actions.index("copy")):
+                    with _slot("copy"):
                         with st.popover("📑 Duplicate", use_container_width=True):
                             st.caption(
                                 "Duplicate this entry onto other dates - same "
@@ -730,7 +793,7 @@ for entry_date_str in dates_in_order:
                                     except (KeyError, ValueError) as exc:
                                         st.error(str(exc))
                     if "delete" in actions:
-                        with _slot(actions.index("delete")):
+                        with _slot("delete"):
                             if st.button(
                                 "🗑 Delete", key=f"del_{entry['id']}",
                                 use_container_width=True,

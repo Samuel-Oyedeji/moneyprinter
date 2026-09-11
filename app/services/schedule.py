@@ -34,8 +34,14 @@ from app.utils import utils
 
 STATUS_PENDING = "pending"
 STATUS_GENERATING = "generating"
+STATUS_UPLOADING = "uploading"
 STATUS_DONE = "done"
 STATUS_FAILED = "failed"
+
+# 失败分两个阶段：generate 阶段失败必须重新生成；upload 阶段失败说明成片
+# 已经在磁盘上，只需要重新上传。UI 据此决定给"重建"还是"重新上传"。
+STAGE_GENERATE = "generate"
+STAGE_UPLOAD = "upload"
 
 # 格式预设只覆盖画幅；其余参数继承 WebUI 保存的默认值，
 # 保证排期生成的视频风格与手动生成一致。
@@ -165,6 +171,10 @@ def _build_entry(
         "status": STATUS_PENDING,
         "task_ids": [],
         "youtube_video_ids": [],
+        # 每个成片一条上传记录（路径 + 元数据 + 已得到的 video_id），
+        # 让上传阶段可以在不重新生成、不重复上传的前提下断点续传。
+        "uploads": [],
+        "failed_stage": "",
         "error": "",
         "created_at": now,
         "updated_at": now,
@@ -237,8 +247,10 @@ def update_entry(entry_id: str, **fields) -> dict:
         for entry in entries:
             if entry.get("id") != entry_id:
                 continue
-            if entry.get("status") == STATUS_GENERATING:
-                raise ValueError("entry is currently generating and cannot be edited")
+            if entry.get("status") in BUSY_STATUSES:
+                raise ValueError(
+                    f"entry is currently {entry['status']} and cannot be edited"
+                )
             if "date" in fields:
                 entry["date"] = _validate_date(fields["date"])
             if "topic" in fields:
@@ -262,6 +274,11 @@ def update_entry(entry_id: str, **fields) -> dict:
                     raise ValueError(f"invalid status: {fields['status']!r}")
                 entry["status"] = fields["status"]
                 entry["error"] = ""
+                if fields["status"] == STATUS_PENDING:
+                    # 重建会产出新的成片，旧的上传计划不能再套用；
+                    # 但 youtube_video_ids 保留，已经上传过的视频要留痕。
+                    entry["uploads"] = []
+                    entry["failed_stage"] = ""
             entry["updated_at"] = _now_iso()
             _save_entries(entries)
             return entry
@@ -275,8 +292,10 @@ def delete_entry(entry_id: str) -> None:
         if len(remaining) == len(entries):
             raise KeyError(f"schedule entry not found: {entry_id}")
         for entry in entries:
-            if entry.get("id") == entry_id and entry.get("status") == STATUS_GENERATING:
-                raise ValueError("entry is currently generating and cannot be deleted")
+            if entry.get("id") == entry_id and entry.get("status") in BUSY_STATUSES:
+                raise ValueError(
+                    f"entry is currently {entry['status']} and cannot be deleted"
+                )
         _save_entries(remaining)
     logger.info(f"schedule entry deleted: {entry_id}")
 
@@ -654,35 +673,152 @@ def _compute_publish_at(entry: dict) -> Optional[str]:
     return publish_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _upload_entry_videos(entry: dict, video_paths: list[str], script: str) -> dict:
-    """Upload each generated video and alert Discord.
+def _load_task_script(video_path: str) -> str:
+    """Read the script a finished video was generated from.
+
+    The task directory next to the video holds ``script.json``, so a
+    re-upload can rebuild YouTube metadata without the original run's
+    in-memory result and without regenerating anything.
+    """
+    script_file = os.path.join(os.path.dirname(video_path), "script.json")
+    try:
+        with open(script_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return (data.get("script") or "").strip()
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return ""
+
+
+def _build_upload_records(video_paths: list[str]) -> list[dict]:
+    """One pending upload record per generated video."""
+    return [
+        {"path": path, "video_id": "", "title": "", "description": "",
+         "tags": [], "error": ""}
+        for path in video_paths
+    ]
+
+
+def _recover_upload_records(entry: dict) -> list[dict]:
+    """Upload records for an entry that predates ``uploads`` being stored.
+
+    Entries that failed before this field existed still have their finished
+    videos on disk under the run's task directory, so they can be recovered
+    from ``task_ids`` and re-uploaded instead of regenerated.
+    """
+    records = []
+    for task_id in entry.get("task_ids", []) or []:
+        task_directory = utils.task_dir(task_id)
+        if not os.path.isdir(task_directory):
+            continue
+        finals = sorted(
+            os.path.join(task_directory, name)
+            for name in os.listdir(task_directory)
+            if name.startswith("final-") and name.endswith(".mp4")
+        )
+        records.extend(_build_upload_records(finals))
+    return records
+
+
+def upload_records(entry: dict) -> list[dict]:
+    """The entry's upload records, recovering legacy entries from disk."""
+    records = entry.get("uploads") or []
+    if not records:
+        records = _recover_upload_records(entry)
+    return records
+
+
+def pending_uploads(entry: dict) -> list[dict]:
+    """Records still needing an upload whose video file is on disk."""
+    return [
+        record
+        for record in upload_records(entry)
+        if not record.get("video_id") and os.path.isfile(record.get("path", ""))
+    ]
+
+
+def can_reupload(entry: dict) -> bool:
+    """Whether this entry can be finished by uploading alone.
+
+    True when generation already produced files that are still on disk and
+    at least one of them never made it to YouTube - the quota-exceeded and
+    expired-token cases, where regenerating would be pure waste.
+    """
+    if entry.get("status") not in (STATUS_FAILED, STATUS_UPLOADING):
+        return False
+    return bool(pending_uploads(entry))
+
+
+def _ensure_record_metadata(record: dict, entry: dict) -> dict:
+    """Fill in a record's YouTube metadata once, reusing it on later retries.
+
+    Generating it here rather than up front means an LLM hiccup on video 3
+    cannot discard video 1 and 2's already-written metadata, and a retry
+    re-publishes under the same title instead of inventing a new one.
+    """
+    from app.services import llm
+
+    if record.get("title"):
+        return record
+
+    language = entry.get("language", "") or config.ui.get("video_language", "")
+    metadata = llm.generate_social_metadata(
+        video_subject=entry["topic"],
+        video_script=_load_task_script(record["path"]),
+        language=language,
+        platform="youtube_shorts",
+    )
+    hashtags = metadata.get("hashtags", [])
+    description = metadata.get("caption", "")
+    if hashtags:
+        description = f"{description}\n\n{' '.join(hashtags)}".strip()
+    record["title"] = metadata.get("title") or entry["topic"]
+    record["description"] = description
+    record["tags"] = hashtags
+    return record
+
+
+def _upload_pending_videos(entry: dict) -> dict:
+    """Upload every record that has no video_id yet, and alert Discord.
+
+    Each record is persisted the moment it succeeds, so a failure partway
+    through (quota running out on video 3 of 5) never costs the videos
+    already uploaded: a later retry skips them instead of duplicating them.
 
     With a post_time set, the video is scheduled on YouTube (private +
     publishAt, so YouTube flips it public automatically at that moment);
     without one it stays a private draft for manual publishing.
     """
-    from app.services import discord_notify, llm, youtube_upload
+    from app.services import discord_notify, youtube_upload
 
-    uploaded_ids = []
-    errors = []
-    language = entry.get("language", "") or config.ui.get("video_language", "")
+    entry_id = entry["id"]
+    records = upload_records(entry)
     publish_at = _compute_publish_at(entry)
+    total = len(records)
+    errors = []
 
-    for index, video_path in enumerate(video_paths, start=1):
-        metadata = llm.generate_social_metadata(
-            video_subject=entry["topic"],
-            video_script=script,
-            language=language,
-            platform="youtube_shorts",
-        )
-        title = metadata.get("title") or entry["topic"]
-        if len(video_paths) > 1:
-            title = f"{title} ({index}/{len(video_paths)})"
-        hashtags = metadata.get("hashtags", [])
-        description = metadata.get("caption", "")
-        if hashtags:
-            description = f"{description}\n\n{' '.join(hashtags)}".strip()
+    for index, record in enumerate(records, start=1):
+        if record.get("video_id"):
+            continue
+        video_path = record.get("path", "")
+        if not os.path.isfile(video_path):
+            record["error"] = f"video file is gone: {video_path}"
+            errors.append(record["error"])
+            _patch_entry(entry_id, uploads=records)
+            continue
 
+        try:
+            _ensure_record_metadata(record, entry)
+        except Exception as e:
+            record["error"] = f"metadata generation failed: {type(e).__name__}: {e}"
+            errors.append(record["error"])
+            _patch_entry(entry_id, uploads=records)
+            continue
+        # 元数据生成成功后先落盘，重试时不再重复调用 LLM。
+        _patch_entry(entry_id, uploads=records)
+
+        title = record["title"]
+        if total > 1:
+            title = f"{title} ({index}/{total})"
         thumbnail_path = _extract_thumbnail(
             video_path, os.path.splitext(video_path)[0] + "-thumbnail.jpg"
         )
@@ -690,26 +826,120 @@ def _upload_entry_videos(entry: dict, video_paths: list[str], script: str) -> di
         result = youtube_upload.youtube_upload_service.upload_video(
             video_path=video_path,
             title=title,
-            description=description,
-            tags=hashtags,
+            description=record.get("description", ""),
+            tags=record.get("tags", []),
             thumbnail_path=thumbnail_path,
             publish_at=publish_at,
         )
-        if result.get("success"):
-            video_id = result["video_id"]
-            uploaded_ids.append(video_id)
-            discord_notify.discord_notify_service.notify_video_ready(
-                title=title,
-                youtube_video_id=video_id,
-                scheduled_date=entry["date"],
-                topic=entry["topic"],
-                post_time=entry.get("post_time", ""),
-                publish_at=publish_at,
-            )
-        else:
-            errors.append(result.get("error", "unknown upload error"))
+        if not result.get("success"):
+            record["error"] = result.get("error", "unknown upload error")
+            errors.append(record["error"])
+            _patch_entry(entry_id, uploads=records)
+            continue
 
-    return {"video_ids": uploaded_ids, "errors": errors}
+        video_id = result["video_id"]
+        record["video_id"] = video_id
+        record["error"] = ""
+        # 已上传的 id 累加而不是覆盖：部分成功的那一次上传过的视频
+        # 必须留在记录里，否则重试会在频道上留下无人追踪的副本。
+        video_ids = list(entry.get("youtube_video_ids") or [])
+        if video_id not in video_ids:
+            video_ids.append(video_id)
+        entry["youtube_video_ids"] = video_ids
+        _patch_entry(entry_id, uploads=records, youtube_video_ids=video_ids)
+
+        discord_notify.discord_notify_service.notify_video_ready(
+            title=title,
+            youtube_video_id=video_id,
+            scheduled_date=entry["date"],
+            topic=entry["topic"],
+            post_time=entry.get("post_time", ""),
+            publish_at=publish_at,
+        )
+
+    return {
+        "video_ids": [r["video_id"] for r in records if r.get("video_id")],
+        "errors": errors,
+        "records": records,
+    }
+
+
+def _finish_upload_stage(entry: dict, upload_result: dict) -> None:
+    """Write the terminal status for an entry whose upload stage just ran."""
+    entry_id = entry["id"]
+    errors = upload_result["errors"]
+    # 与条目上已有的 id 合并，而不是覆盖：一次重建会产生新的成片，但上一
+    # 次已经传上频道的视频仍然存在，id 丢了就没人能再找到它们去删除。
+    video_ids = list(entry.get("youtube_video_ids") or [])
+    for video_id in upload_result["video_ids"]:
+        if video_id not in video_ids:
+            video_ids.append(video_id)
+    if video_ids and not errors:
+        _patch_entry(
+            entry_id,
+            status=STATUS_DONE,
+            youtube_video_ids=video_ids,
+            failed_stage="",
+            error="",
+        )
+        return
+
+    error = "; ".join(errors) if errors else "no videos were uploaded"
+    _patch_entry(
+        entry_id,
+        status=STATUS_FAILED,
+        youtube_video_ids=video_ids,
+        failed_stage=STAGE_UPLOAD,
+        error=error,
+    )
+    from app.services import discord_notify
+
+    discord_notify.discord_notify_service.notify_failure(
+        entry["date"], entry["topic"], error
+    )
+
+
+def reupload_entry(entry_id: str) -> dict:
+    """Upload an entry's already-rendered videos without regenerating them.
+
+    This is the answer to an upload that died on something unrelated to the
+    video itself - YouTube daily quota exhausted, an expired refresh token,
+    a network drop. The finished files are read straight off disk and only
+    the ones that never reached YouTube are sent.
+    """
+    entry = get_entry(entry_id)
+    if entry is None:
+        raise KeyError(f"schedule entry not found: {entry_id}")
+    if entry.get("status") == STATUS_GENERATING:
+        raise ValueError("entry is currently generating")
+
+    records = upload_records(entry)
+    if not records:
+        raise ValueError(
+            "no rendered videos found on disk for this entry - it has to be "
+            "regenerated"
+        )
+    if not pending_uploads(entry):
+        raise ValueError("every video for this entry is already on YouTube")
+
+    logger.info(
+        f"re-uploading schedule entry {entry_id} without regenerating: "
+        f"{len(pending_uploads(entry))} of {len(records)} video(s) pending"
+    )
+    _patch_entry(entry_id, status=STATUS_UPLOADING, uploads=records, error="")
+    entry = get_entry(entry_id) or entry
+    try:
+        upload_result = _upload_pending_videos(entry)
+    except Exception as e:
+        error = f"re-upload failed: {type(e).__name__}: {str(e)}"
+        logger.exception(f"schedule entry {entry_id} failed while re-uploading")
+        _patch_entry(
+            entry_id, status=STATUS_FAILED, failed_stage=STAGE_UPLOAD, error=error
+        )
+        raise
+
+    _finish_upload_stage(get_entry(entry_id) or entry, upload_result)
+    return get_entry(entry_id) or entry
 
 
 def _run_entry(entry: dict) -> None:
@@ -725,8 +955,23 @@ def _run_entry(entry: dict) -> None:
         f"preset={entry['preset']}, task_id={task_id}"
     )
     _patch_entry(
-        entry_id, status=STATUS_GENERATING, task_ids=[task_id], error=""
+        entry_id,
+        status=STATUS_GENERATING,
+        task_ids=[task_id],
+        failed_stage="",
+        error="",
     )
+
+    def _fail_generation(error: str) -> None:
+        _patch_entry(
+            entry_id,
+            status=STATUS_FAILED,
+            failed_stage=STAGE_GENERATE,
+            error=str(error),
+        )
+        discord_notify.discord_notify_service.notify_failure(
+            entry["date"], entry["topic"], str(error)
+        )
 
     try:
         params = _build_video_params(entry)
@@ -734,52 +979,36 @@ def _run_entry(entry: dict) -> None:
         result = tm.start(task_id=task_id, params=params, stop_at="video")
     except Exception as e:
         logger.exception(f"schedule entry {entry_id} crashed: {str(e)}")
-        _patch_entry(entry_id, status=STATUS_FAILED, error=str(e))
-        discord_notify.discord_notify_service.notify_failure(
-            entry["date"], entry["topic"], str(e)
-        )
+        _fail_generation(str(e))
         return
 
     videos = (result or {}).get("videos") or []
     if not videos:
-        error = (result or {}).get("error", "video generation failed")
-        _patch_entry(entry_id, status=STATUS_FAILED, error=str(error))
-        discord_notify.discord_notify_service.notify_failure(
-            entry["date"], entry["topic"], str(error)
-        )
+        _fail_generation((result or {}).get("error", "video generation failed"))
         return
 
-    script = (result or {}).get("script", "")
+    # 成片路径先落盘再进入上传阶段：上传失败时条目会带着可用的文件列表
+    # 停在 failed，重试只需要重新上传，不必重新生成。
+    records = _build_upload_records(videos)
+    _patch_entry(entry_id, status=STATUS_UPLOADING, uploads=records)
+    entry = get_entry(entry_id) or entry
+
     try:
-        upload_result = _upload_entry_videos(entry, videos, script)
+        upload_result = _upload_pending_videos(entry)
     except Exception as e:
         # 上传阶段崩溃过去会让条目永远停在 generating（视频已生成，
         # 任务管理器显示 completed，但日历不动，也没有告警）。
         logger.exception(f"schedule entry {entry_id} failed while uploading: {str(e)}")
         error = f"upload failed: {type(e).__name__}: {str(e)}"
-        _patch_entry(entry_id, status=STATUS_FAILED, error=error)
+        _patch_entry(
+            entry_id, status=STATUS_FAILED, failed_stage=STAGE_UPLOAD, error=error
+        )
         discord_notify.discord_notify_service.notify_failure(
             entry["date"], entry["topic"], error
         )
         return
-    video_ids = upload_result["video_ids"]
-    errors = upload_result["errors"]
 
-    if video_ids and not errors:
-        _patch_entry(
-            entry_id, status=STATUS_DONE, youtube_video_ids=video_ids, error=""
-        )
-    else:
-        error = "; ".join(errors) if errors else "no videos were uploaded"
-        _patch_entry(
-            entry_id,
-            status=STATUS_FAILED,
-            youtube_video_ids=video_ids,
-            error=error,
-        )
-        discord_notify.discord_notify_service.notify_failure(
-            entry["date"], entry["topic"], error
-        )
+    _finish_upload_stage(get_entry(entry_id) or entry, upload_result)
 
 
 # 一个条目正常只会在 generating 停留一次生成+上传的时间。超过这个上限
@@ -788,9 +1017,14 @@ def _run_entry(entry: dict) -> None:
 STALE_GENERATING_HOURS = 3
 
 
+# 生成中和上传中都属于"运行中"：两者都不能被编辑或删除，卡住时也
+# 都需要被解锁。
+BUSY_STATUSES = (STATUS_GENERATING, STATUS_UPLOADING)
+
+
 def _generating_age_hours(entry: dict) -> Optional[float]:
-    """How long an entry has been sitting in ``generating``, in hours."""
-    if entry.get("status") != STATUS_GENERATING:
+    """How long an entry has been sitting in a running status, in hours."""
+    if entry.get("status") not in BUSY_STATUSES:
         return None
     try:
         updated = datetime.fromisoformat(entry.get("updated_at", ""))
@@ -813,16 +1047,22 @@ def recover_stale_entries() -> list[str]:
         if not is_stale_generating(entry):
             continue
         age = _generating_age_hours(entry) or 0
+        stuck_status = entry.get("status", STATUS_GENERATING)
+        # 卡在 upload 阶段说明成片已经生成好了，重试时只需要重新上传。
+        stage = (
+            STAGE_UPLOAD if stuck_status == STATUS_UPLOADING else STAGE_GENERATE
+        )
         logger.warning(
-            f"schedule entry {entry['id']} stuck in generating for "
+            f"schedule entry {entry['id']} stuck in {stuck_status} for "
             f"{age:.1f}h, marking failed so it can be retried"
         )
         _patch_entry(
             entry["id"],
             status=STATUS_FAILED,
+            failed_stage=stage,
             error=(
-                f"stuck in generating for {age:.1f}h - the run was interrupted "
-                "(process restart or an unhandled error during upload). "
+                f"stuck in {stuck_status} for {age:.1f}h - the run was "
+                "interrupted (process restart or an unhandled error). "
                 "Check the logs, then retry."
             ),
         )
@@ -839,6 +1079,7 @@ def reset_entry(entry_id: str) -> dict:
                 continue
             entry["status"] = STATUS_PENDING
             entry["error"] = ""
+            entry["failed_stage"] = ""
             entry["updated_at"] = _now_iso()
             _save_entries(entries)
             logger.info(f"schedule entry reset to pending: {entry_id}")
