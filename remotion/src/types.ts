@@ -1,0 +1,196 @@
+// The story format. A workflow writes one of these as JSON; the kit turns it
+// into video. Everything on screen is drawn in code from named options, so
+// an LLM can fill it in without writing drawing code.
+//
+// Coordinates are fractions of the frame: x 0 = left edge, 1 = right edge;
+// y 0 = top, 1 = bottom. Times are seconds. Scene times are relative to the
+// scene's own start; caption word times are absolute (they come from TTS).
+
+export type Sky = "day" | "dusk" | "night" | "storm" | "parchment" | "room";
+export type Ground = "hills" | "town" | "field" | "sea" | "none";
+
+// Code-drawn props that belong to the backdrop.
+export type Extra =
+  | { type: "sun"; x?: number; y?: number; size?: number; face?: boolean }
+  | { type: "moon"; x?: number; y?: number; size?: number }
+  | { type: "stars" }
+  | { type: "clouds"; count?: number }
+  | { type: "rain" }
+  | { type: "snow" }
+  | { type: "window"; x?: number; y?: number; size?: number }
+  | { type: "table"; x?: number; y?: number; width?: number }
+  | { type: "tree"; x: number; y?: number; size?: number };
+
+export type Backdrop = {
+  sky: Sky;
+  ground?: Ground; // ignored for "room" (it has its own floor) and "parchment"
+  extras?: Extra[]; // added to the sky's defaults (night has stars + moon, etc.)
+  noDefaults?: boolean; // true = only draw the extras listed here
+  seed?: number;
+};
+
+// ------------------------------------------------------------ characters
+
+export type Skin = "light" | "fair" | "tan" | "brown" | "dark" | "deep";
+export type HairStyle =
+  | "short" | "side-part" | "spiky" | "curly" | "afro" | "long" | "bob"
+  | "bun" | "ponytail" | "braids" | "balding" | "bald" | "headscarf";
+export type HatStyle = "fedora" | "bowler" | "tophat" | "cap" | "crown" | "beanie" | "straw" | "helmet";
+export type TopStyle = "shirt" | "tshirt" | "sweater" | "suit" | "labcoat" | "coat" | "dress" | "robe";
+export type BottomStyle = "trousers" | "shorts" | "skirt";
+export type Accessory = "tie" | "bowtie" | "glasses" | "scarf" | "necklace" | "belt" | "apron" | "cape";
+
+// One person, defined once per story and reused in every scene so they
+// always look the same. Colours are hex strings; anything left out gets a
+// sensible default.
+export type Character = {
+  id: string;
+  age?: "child" | "adult" | "elder";
+  build?: "slim" | "average" | "broad";
+  skin?: Skin | string;
+  hair?: { style: HairStyle; color?: string };
+  facialHair?: "none" | "mustache" | "beard" | "goatee";
+  top?: { style: TopStyle; color?: string; inner?: string }; // inner = shirt/vest under a suit or coat
+  bottom?: { style: BottomStyle; color?: string };
+  shoes?: string;
+  hat?: { style: HatStyle; color?: string };
+  accessories?: Accessory[];
+  accent?: string; // tie, scarf, necklace, cape colour
+};
+
+export type Expression = "smile" | "grin" | "neutral" | "frown" | "surprised" | "worried" | "angry" | "sleepy";
+
+export type Enter = "pop" | "slide-left" | "slide-right" | "drop" | "flip" | "none";
+export type Exit = "fold" | "slide-left" | "slide-right" | "fly-up";
+
+export type PersonAction =
+  | { do: "walk"; at: number; dur: number; to: number } // to = new x
+  | { do: "talk"; at: number; dur: number }
+  | { do: "point"; at: number; dur?: number }
+  | { do: "wave"; at: number; dur?: number }
+  | { do: "shrug"; at: number }
+  | { do: "think"; at: number; dur?: number }
+  | { do: "cheer"; at: number; dur?: number }
+  | { do: "nod"; at: number }
+  | { do: "shake-head"; at: number }
+  | { do: "hop"; at: number }
+  | { do: "turn"; at: number } // face the other way
+  | { do: "look"; at: number; dir: "left" | "right" | "up" | "down" | "ahead" }
+  | { do: "feel"; at: number; face: Expression }; // change expression
+
+// A cast member placed in a scene.
+export type Person = {
+  who: string; // Character.id
+  x: number;
+  y: number; // where the feet are
+  height?: number; // fraction of frame height, default 0.34 (child 0.24)
+  depth?: number;
+  facing?: "left" | "right" | "front";
+  face?: Expression; // starting expression, default "smile"
+  holding?: { prop: PropName; color?: string; pose?: "down" | "up" }; // down = carried at the side, up = held up to look at
+  enter?: { type: Enter; at?: number };
+  exit?: { type: Exit; at: number };
+  actions?: PersonAction[];
+};
+
+// ------------------------------------------------------------ props
+
+export type PropName =
+  | "book" | "scroll" | "letter" | "coin" | "moneybag" | "crown" | "sword" | "flag"
+  | "candle" | "bottle" | "pills" | "cup" | "flask" | "petri-dish" | "dish-stack"
+  | "microscope" | "apple" | "basket" | "bucket" | "chest" | "key" | "clock"
+  | "hourglass" | "globe" | "lightbulb" | "heart" | "star" | "trophy" | "gift"
+  | "suitcase" | "umbrella" | "house" | "boat" | "rock" | "well" | "sign"
+  | "chair" | "plant" | "phone" | "laptop" | "arrow" | "shapes";
+
+// A simple shape for the "shapes" prop: coordinates are fractions of the
+// prop's box (0,0 top-left, 1,1 bottom-right), for anything not in the list.
+export type Shape =
+  | { type: "rect"; x: number; y: number; w: number; h: number; color: string; round?: number }
+  | { type: "circle"; x: number; y: number; r: number; color: string }
+  | { type: "ellipse"; x: number; y: number; rx: number; ry: number; color: string }
+  | { type: "poly"; points: [number, number][]; color: string };
+
+export type PropIdle = "breathe" | "sway" | "float" | "still";
+export type PropAction =
+  | { do: "hop"; at: number }
+  | { do: "walk"; at: number; dur: number; to: number }
+  | { do: "turn"; at: number }
+  | { do: "shake"; at: number; dur?: number }
+  | { do: "nod"; at: number }
+  | { do: "grow"; at: number; dur?: number }
+  | { do: "talk"; at: number; dur: number }
+  | { do: "tilt"; at: number; deg?: number }; // lean over and stay leaning
+
+export type Prop = {
+  prop: PropName;
+  x: number;
+  y: number; // where its bottom edge sits
+  height: number; // fraction of frame height
+  depth?: number;
+  color?: string; // main colour; each prop has a default
+  color2?: string; // second colour (liquid, label, ribbon...)
+  text?: string; // sign, book cover, scroll
+  shapes?: Shape[]; // for prop "shapes"
+  aspect?: number; // for prop "shapes": width / height of its box
+  mould?: boolean; // petri-dish: the blue-green mould with its clear ring
+  flip?: boolean;
+  enter?: { type: Enter; at?: number };
+  exit?: { type: Exit; at: number };
+  idle?: PropIdle;
+  actions?: PropAction[];
+};
+
+export type Actor = Person | Prop;
+export const isPerson = (a: Actor): a is Person => "who" in a;
+
+// ------------------------------------------------------------ notes, camera
+
+export type Note =
+  // Big torn-paper banner near the top of the frame.
+  | { kind: "title"; text: string; sub?: string; at?: number; y?: number }
+  // A paper badge that slams in: dates, numbers. `count` rolls the number up.
+  | {
+      kind: "stamp";
+      text: string;
+      at?: number;
+      x?: number;
+      y?: number;
+      size?: number;
+      count?: { from: number; to: number; dur?: number; prefix?: string; suffix?: string; separator?: boolean }; // separator false for years
+    }
+  // A paper tag on a string, pinned to a point in the scene.
+  | { kind: "label"; text: string; at?: number; x: number; y: number; toX: number; toY: number };
+
+export type Camera = {
+  move?: "still" | "push" | "pull" | "pan-left" | "pan-right" | "rise" | "drift";
+  focusX?: number; // where a push/pull aims
+  focusY?: number;
+  amount?: number; // 1 = default strength
+};
+
+export type Scene = {
+  id?: string;
+  duration: number;
+  backdrop: Backdrop;
+  camera?: Camera;
+  actors?: Actor[]; // drawn back to front in list order (within the same depth)
+  notes?: Note[];
+  transition?: "tear" | "cut"; // how this scene arrives
+};
+
+export type Word = { text: string; at: number; end?: number };
+
+export type Story = {
+  title?: string;
+  width?: number;
+  height?: number;
+  fps?: number;
+  cast?: Character[];
+  narration?: string; // audio path inside the public dir
+  music?: string;
+  musicVolume?: number;
+  words?: Word[]; // caption timing, absolute seconds
+  captions?: boolean;
+  scenes: Scene[];
+};

@@ -1,0 +1,382 @@
+{
+ "voice": "en-GB-RyanNeural",
+ "narration": [
+  "In 1928, a scientist named Alexander Fleming came home from his summer holiday.",
+  "He had left his lab in a mess. Dishes of germs were piled up on his bench.",
+  "But on one dish, a strange mould had grown. And all around it, the germs had vanished.",
+  "That mould gave the world penicillin, the first true antibiotic. It has saved millions of lives.",
+  "Sometimes, a mistake is just a discovery, waiting for someone to notice."
+ ],
+ "words": [
+  {
+   "text": "In 1928",
+   "at": 0.1,
+   "end": 1.43
+  },
+  {
+   "text": "a",
+   "at": 1.589,
+   "end": 1.643
+  },
+  {
+   "text": "scientist",
+   "at": 1.656,
+   "end": 2.241
+  },
+  {
+   "text": "named",
+   "at": 2.254,
+   "end": 2.587
+  },
+  {
+   "text": "Alexander",
+   "at": 2.6,
+   "end": 3.252
+  },
+  {
+   "text": "Fleming",
+   "at": 3.265,
+   "end": 3.677
+  },
+  {
+   "text": "came",
+   "at": 3.69,
+   "end": 3.956
+  },
+  {
+   "text": "home",
+   "at": 3.97,
+   "end": 4.289
+  },
+  {
+   "text": "from",
+   "at": 4.302,
+   "end": 4.475
+  },
+  {
+   "text": "his",
+   "at": 4.488,
+   "end": 4.661
+  },
+  {
+   "text": "summer",
+   "at": 4.674,
+   "end": 4.94
+  },
+  {
+   "text": "holiday",
+   "at": 4.954,
+   "end": 5.539
+  },
+  {
+   "text": "He",
+   "at": 6.46,
+   "end": 6.646
+  },
+  {
+   "text": "had",
+   "at": 6.659,
+   "end": 6.845
+  },
+  {
+   "text": "left",
+   "at": 6.859,
+   "end": 7.138
+  },
+  {
+   "text": "his",
+   "at": 7.151,
+   "end": 7.324
+  },
+  {
+   "text": "lab",
+   "at": 7.337,
+   "end": 7.59
+  },
+  {
+   "text": "in",
+   "at": 7.603,
+   "end": 7.696
+  },
+  {
+   "text": "a",
+   "at": 7.71,
+   "end": 7.749
+  },
+  {
+   "text": "mess",
+   "at": 7.763,
+   "end": 8.295
+  },
+  {
+   "text": "Dishes",
+   "at": 9.212,
+   "end": 9.638
+  },
+  {
+   "text": "of",
+   "at": 9.651,
+   "end": 9.757
+  },
+  {
+   "text": "germs",
+   "at": 9.771,
+   "end": 10.183
+  },
+  {
+   "text": "were",
+   "at": 10.196,
+   "end": 10.303
+  },
+  {
+   "text": "piled",
+   "at": 10.316,
+   "end": 10.702
+  },
+  {
+   "text": "up",
+   "at": 10.715,
+   "end": 10.874
+  },
+  {
+   "text": "on",
+   "at": 10.888,
+   "end": 11.034
+  },
+  {
+   "text": "his",
+   "at": 11.047,
+   "end": 11.22
+  },
+  {
+   "text": "bench",
+   "at": 11.233,
+   "end": 11.765
+  },
+  {
+   "text": "But",
+   "at": 12.683,
+   "end": 12.882
+  },
+  {
+   "text": "on",
+   "at": 12.896,
+   "end": 13.055
+  },
+  {
+   "text": "one",
+   "at": 13.069,
+   "end": 13.308
+  },
+  {
+   "text": "dish",
+   "at": 13.321,
+   "end": 13.64
+  },
+  {
+   "text": "a",
+   "at": 13.827,
+   "end": 13.88
+  },
+  {
+   "text": "strange",
+   "at": 13.893,
+   "end": 14.332
+  },
+  {
+   "text": "mould",
+   "at": 14.345,
+   "end": 14.624
+  },
+  {
+   "text": "had",
+   "at": 14.638,
+   "end": 14.784
+  },
+  {
+   "text": "grown",
+   "at": 14.797,
+   "end": 15.316
+  },
+  {
+   "text": "And",
+   "at": 16.233,
+   "end": 16.46
+  },
+  {
+   "text": "all",
+   "at": 16.473,
+   "end": 16.686
+  },
+  {
+   "text": "around",
+   "at": 16.699,
+   "end": 17.085
+  },
+  {
+   "text": "it",
+   "at": 17.098,
+   "end": 17.257
+  },
+  {
+   "text": "the",
+   "at": 17.47,
+   "end": 17.577
+  },
+  {
+   "text": "germs",
+   "at": 17.59,
+   "end": 18.002
+  },
+  {
+   "text": "had",
+   "at": 18.015,
+   "end": 18.175
+  },
+  {
+   "text": "vanished",
+   "at": 18.188,
+   "end": 18.72
+  },
+  {
+   "text": "That",
+   "at": 19.638,
+   "end": 19.904
+  },
+  {
+   "text": "mould",
+   "at": 19.917,
+   "end": 20.236
+  },
+  {
+   "text": "gave",
+   "at": 20.249,
+   "end": 20.449
+  },
+  {
+   "text": "the",
+   "at": 20.462,
+   "end": 20.542
+  },
+  {
+   "text": "world",
+   "at": 20.555,
+   "end": 20.914
+  },
+  {
+   "text": "penicillin",
+   "at": 20.928,
+   "end": 21.566
+  },
+  {
+   "text": "the",
+   "at": 21.712,
+   "end": 21.805
+  },
+  {
+   "text": "first",
+   "at": 21.819,
+   "end": 22.218
+  },
+  {
+   "text": "true",
+   "at": 22.231,
+   "end": 22.523
+  },
+  {
+   "text": "antibiotic",
+   "at": 22.537,
+   "end": 23.507
+  },
+  {
+   "text": "It",
+   "at": 24.425,
+   "end": 24.611
+  },
+  {
+   "text": "has",
+   "at": 24.624,
+   "end": 24.811
+  },
+  {
+   "text": "saved",
+   "at": 24.824,
+   "end": 25.196
+  },
+  {
+   "text": "millions",
+   "at": 25.21,
+   "end": 25.662
+  },
+  {
+   "text": "of",
+   "at": 25.675,
+   "end": 25.768
+  },
+  {
+   "text": "lives",
+   "at": 25.781,
+   "end": 26.433
+  },
+  {
+   "text": "Sometimes",
+   "at": 27.351,
+   "end": 28.135
+  },
+  {
+   "text": "a",
+   "at": 28.308,
+   "end": 28.348
+  },
+  {
+   "text": "mistake",
+   "at": 28.361,
+   "end": 28.827
+  },
+  {
+   "text": "is",
+   "at": 28.84,
+   "end": 28.973
+  },
+  {
+   "text": "just",
+   "at": 28.986,
+   "end": 29.279
+  },
+  {
+   "text": "a",
+   "at": 29.292,
+   "end": 29.345
+  },
+  {
+   "text": "discovery",
+   "at": 29.358,
+   "end": 29.957
+  },
+  {
+   "text": "waiting",
+   "at": 30.183,
+   "end": 30.542
+  },
+  {
+   "text": "for",
+   "at": 30.555,
+   "end": 30.675
+  },
+  {
+   "text": "someone",
+   "at": 30.688,
+   "end": 31.087
+  },
+  {
+   "text": "to",
+   "at": 31.101,
+   "end": 31.22
+  },
+  {
+   "text": "notice",
+   "at": 31.233,
+   "end": 31.858
+  }
+ ]
+}

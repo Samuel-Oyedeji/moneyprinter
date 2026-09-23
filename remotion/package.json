@@ -1,0 +1,23 @@
+{
+  "name": "paper-story",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Paper cut-out story videos for MoneyPrinterTurbo, rendered with Remotion.",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render:demo": "remotion render src/index.ts PaperStory out/demo.mp4",
+    "still": "remotion still src/index.ts PaperStory out/still.png"
+  },
+  "dependencies": {
+    "@fontsource/fredoka": "^5.2.8",
+    "@fontsource/patrick-hand": "^5.3.0",
+    "@remotion/cli": "4.0.527",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "4.0.527"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.31",
+    "typescript": "^5.6.3"
+  }
+}
