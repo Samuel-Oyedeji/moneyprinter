@@ -258,7 +258,8 @@ def _upload_load_line(day_iso: str) -> tuple[str, bool]:
     load = doc_schedule.daily_upload_load(day_iso)
     line = (
         f"{load['total']}/{load['budget']} uploads planned on {day_iso} "
-        f"(Shorts {load['shorts']} + documentaries {load['documentaries']}). "
+        f"(Shorts {load['shorts']} + documentaries {load['documentaries']} "
+        f"+ animations {load['animations']}). "
         "YouTube's API quota allows ~6 uploads/day."
     )
     return line, load["total"] >= load["budget"]

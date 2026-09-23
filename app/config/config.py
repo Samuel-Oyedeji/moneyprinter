@@ -501,6 +501,7 @@ def save_config():
         config_to_save["youtube"] = dict(youtube)
         config_to_save["discord"] = dict(discord)
         config_to_save["documentary"] = dict(documentary)
+        config_to_save["animation"] = dict(animation)
         config_to_save["ui"] = dict(ui)
         serialized_config = toml.dumps(config_to_save)
 
@@ -579,6 +580,7 @@ def reload_config() -> None:
             ("youtube", youtube),
             ("discord", discord),
             ("documentary", documentary),
+            ("animation", animation),
             ("ui", ui),
         ):
             section.clear()
@@ -599,6 +601,7 @@ fish_audio = _SynchronizedConfig(_cfg.get("fish_audio", {}))
 youtube = _SynchronizedConfig(_cfg.get("youtube", {}))
 discord = _SynchronizedConfig(_cfg.get("discord", {}))
 documentary = _SynchronizedConfig(_cfg.get("documentary", {}))
+animation = _SynchronizedConfig(_cfg.get("animation", {}))
 ui = _SynchronizedConfig(
     _cfg.get(
         "ui",

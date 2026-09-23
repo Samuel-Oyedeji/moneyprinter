@@ -1,3 +1,7 @@
+# Node.js for the Remotion animation renderer (remotion/), copied from the
+# official image so no extra apt repository is needed.
+FROM node:22-bullseye-slim AS node
+
 # Use an official Python runtime as a parent image
 FROM python:3.11-slim-bullseye
 
@@ -29,7 +33,10 @@ RUN set -u; \
     }; \
     install_system_dependencies() { \
         apt-get update && \
-        apt-get install -y --no-install-recommends git ffmpeg; \
+        apt-get install -y --no-install-recommends git ffmpeg \
+            libnss3 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 libgbm1 libasound2 \
+            libxrandr2 libxkbcommon0 libxfixes3 libxcomposite1 libxdamage1 \
+            libpango-1.0-0 libcairo2 libcups2; \
     }; \
     retry_system_dependencies() { \
         attempt=1; \
@@ -78,6 +85,15 @@ RUN set -u; \
         fi; \
     fi; \
     rm -rf /var/lib/apt/lists/*
+
+# Node + npm for rendering animations. The kit's npm packages (and
+# Remotion's headless Chrome) install into remotion/node_modules on the
+# first render, which the compose bind mount keeps between restarts.
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && node --version && npm --version
 
 # Copy only the requirements.txt first to leverage Docker cache
 COPY requirements.txt ./

@@ -243,5 +243,15 @@ def run_schedules(request: Request, body: ScheduleRunRequest = None):
         daemon=True,
         name="documentary-schedule-run",
     ).start()
+
+    # Animations too: same hook, own calendar, own lock.
+    from app.services.animation import schedule as animation_schedule
+
+    threading.Thread(
+        target=animation_schedule.run_due_entries,
+        kwargs={"run_date": run_date},
+        daemon=True,
+        name="animation-schedule-run",
+    ).start()
     logger.info(f"schedule run triggered, request_id: {request_id}")
     return utils.get_response(200, {"triggered": True, "date": run_date})

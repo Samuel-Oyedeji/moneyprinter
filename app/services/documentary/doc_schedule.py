@@ -12,8 +12,8 @@ scheduler) stored in storage/documentary/_schedule.json. Two entry modes:
 Uploads reuse the existing YoutubeUploadService (thumbnail + publishAt) and
 the short-form scheduler's publish-time math. The YouTube Data API's
 default quota allows ~6 uploads/day (videos.insert costs 1600 of 10000
-units), shared between Shorts and documentaries — daily_upload_load() feeds
-the UI warnings for that.
+units), shared between Shorts, documentaries and animations —
+daily_upload_load() (app.services.upload_budget) feeds the UI warnings.
 """
 
 import json
@@ -156,26 +156,10 @@ def _patch_entry(entry_id: str, **fields) -> dict:
 
 
 def daily_upload_load(date: str) -> dict:
-    """Planned YouTube uploads on a date, across Shorts and documentaries."""
-    from app.services import schedule as shorts_schedule
+    """Planned YouTube uploads on a date, across Shorts, documentaries and animations."""
+    from app.services import upload_budget
 
-    shorts = 0
-    for entry in shorts_schedule.list_entries(start_date=date, end_date=date):
-        if entry.get("status") != "failed":
-            shorts += int(entry.get("video_count", 1) or 1)
-    docs = sum(
-        1
-        for entry in _load_entries()
-        if entry.get("date") == date and entry.get("status") != STATUS_FAILED
-    )
-    total = shorts + docs
-    return {
-        "shorts": shorts,
-        "documentaries": docs,
-        "total": total,
-        "budget": YOUTUBE_DAILY_UPLOAD_BUDGET,
-        "over_budget": total > YOUTUBE_DAILY_UPLOAD_BUDGET,
-    }
+    return upload_budget.daily_load(date)
 
 
 def sources_block(project_id: str, limit: int = 8) -> str:

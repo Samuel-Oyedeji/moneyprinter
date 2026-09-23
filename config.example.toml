@@ -553,6 +553,21 @@ image_split_seconds = 18
 # serpapi_price_per_search = 0.01
 # elevenlabs_price_per_1k_chars = 0.10   # v2 Multilingual; v3 conv/Flash: 0.05
 
+[animation]
+# Paper cut-out animated videos (Animation page). Everything on screen is
+# drawn in code by the Remotion project in remotion/ — no generated images.
+# The storyboard writer's LLM; empty values fall back to [documentary].
+llm_provider = ""
+llm_model_name = ""
+# Narration voice: "elevenlabs:<voice_id>:<name>" (word timings drive the
+# captions and the action cues). Edge voices ("en-GB-RyanNeural") also work.
+voice_name = ""
+default_seconds = 30
+default_aspect = "9:16"            # "9:16" or "16:9"
+# Remotion render concurrency (browser tabs); empty = Remotion's default.
+# render_concurrency = 4
+# elevenlabs_price_per_1k_chars = 0.10
+
 # =============================================================================
 # TTS Providers / 语音合成服务
 # =============================================================================
