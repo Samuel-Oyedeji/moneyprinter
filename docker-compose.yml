@@ -6,6 +6,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # 海外服务器默认走官方 Debian/PyPI 源；国内构建可用
+        # DOCKER_BUILD_MIRROR=china PIP_USE_OFFICIAL=0 切回镜像源。
+        DOCKER_BUILD_MIRROR: ${DOCKER_BUILD_MIRROR:-default}
+        PIP_USE_OFFICIAL: ${PIP_USE_OFFICIAL:-1}
     container_name: "moneyprinterturbo-webui"
     ports:
       - "127.0.0.1:8501:8501"
@@ -16,6 +21,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        DOCKER_BUILD_MIRROR: ${DOCKER_BUILD_MIRROR:-default}
+        PIP_USE_OFFICIAL: ${PIP_USE_OFFICIAL:-1}
     container_name: "moneyprinterturbo-api"
     ports:
       # Host port 9000 → container port 8080 (host's 8080 is used by another service).
