@@ -90,6 +90,13 @@ def _slug(value) -> str:
 def sanitize_character(raw: dict, index: int) -> dict:
     raw = raw if isinstance(raw, dict) else {}
     out: dict = {"id": _slug(raw.get("id")) or f"person-{index + 1}"}
+    kind = _pick(raw.get("kind"), vocab.KINDS)
+    if kind and kind != "person":
+        out["kind"] = kind
+    if kind == "animal":
+        out["species"] = _pick(raw.get("species"), vocab.SPECIES, "fox")
+        if _hex(raw.get("fur")):
+            out["fur"] = _hex(raw.get("fur"))
     for key, allowed in (("age", vocab.AGES), ("build", vocab.BUILDS)):
         if _pick(raw.get(key), allowed):
             out[key] = _pick(raw.get(key), allowed)
@@ -203,11 +210,33 @@ class Cues:
 
 
 # ------------------------------------------------------------------ scenes
-def _extras(scene: dict, L: dict, has_title: bool, used_x: list[float]) -> tuple[list[dict], bool]:
-    names = [_pick(e, vocab.EXTRAS) for e in (scene.get("extras") or [])]
+def _ground(sky: str, value, peopled: bool) -> str:
+    """Interiors and parchment have no ground; space and underwater have their own."""
+    if sky in vocab.INTERIORS or sky == "parchment":
+        return "none"
+    if sky == "underwater":
+        return "seabed"
+    if sky == "space":
+        return _pick(value, vocab.SPACE_GROUNDS) or ("lunar" if peopled else "none")
+    return _pick(value, vocab.OUTDOOR_GROUNDS, "hills")
+
+
+def _allowed_extras(sky: str) -> tuple:
+    if sky in vocab.OUTDOOR_SKIES:
+        return vocab.OUTDOOR_EXTRAS
+    if sky == "space":
+        return vocab.SPACE_EXTRAS
+    if sky == "underwater":
+        return vocab.UNDERWATER_EXTRAS
+    return ("window",) if sky == "room" else ()
+
+
+def _extras(scene: dict, sky: str, L: dict, has_title: bool, used_x: list[float]) -> tuple[list[dict], bool]:
+    names = [_pick(e, _allowed_extras(sky)) for e in (scene.get("extras") or [])]
     names = [n for n in names if n]
     out: list[dict] = []
     tree_sides = [0.1, 0.9]
+    landmark = False
     for n in dict.fromkeys(names):
         if n == "sun":
             out.append({"type": "sun", "x": 0.18, "y": 0.3, "size": 0.75} if has_title else {"type": "sun", "x": 0.8, "y": 0.12})
@@ -220,6 +249,18 @@ def _extras(scene: dict, L: dict, has_title: bool, used_x: list[float]) -> tuple
                 if all(abs(x - u) > 0.15 for u in used_x):
                     out.append({"type": "tree", "x": x, "y": L["tree_y"]})
                     break
+        elif n == "planet":
+            out.append({"type": "planet", "x": 0.76, "y": 0.28 if has_title else 0.2})
+        elif n == "earth":
+            out.append({"type": "earth", "x": 0.26 if "planet" in names else 0.72, "y": 0.3 if has_title else 0.24})
+        elif n in vocab.LANDMARKS:
+            if landmark:
+                continue  # one landmark per horizon
+            landmark = True
+            crowd = sum(used_x) / len(used_x) if used_x else 0.3
+            out.append({"type": n, "x": 0.3 if crowd > 0.5 else 0.7})
+        elif n in ("birds", "fish"):
+            out.append({"type": n, "count": 4 if n == "birds" else 5})
         else:
             out.append({"type": n})
     return out, bool(names)
@@ -282,7 +323,7 @@ def _count_for(text: str):
 def compile_scene(raw: dict, index: int, start: float, duration: float, scene_words: list[dict], cast_by_id: dict, L: dict) -> dict:
     cues = Cues(scene_words, start, duration)
     sky = _pick(raw.get("sky"), vocab.SKIES, "day")
-    ground = _pick(raw.get("ground"), vocab.GROUNDS, "hills")
+    ground = _ground(sky, raw.get("ground"), bool(raw.get("people")))
     notes_raw = [n for n in (raw.get("notes") or []) if isinstance(n, dict)]
     has_title = any(_pick(n.get("kind"), vocab.NOTE_KINDS) == "title" for n in notes_raw)
 
@@ -317,6 +358,8 @@ def compile_scene(raw: dict, index: int, start: float, duration: float, scene_wo
         prop: dict = {"prop": "shapes" if shapes else name, "x": x, "y": y, "height": h, "idle": "float" if level == "air" else "still"}
         if shapes:
             prop["shapes"] = shapes
+            if _slug(p.get("name")):
+                prop["name"] = _slug(p.get("name"))  # so a zoom can fly into it
             try:
                 prop["aspect"] = round(_clamp(float(p.get("aspect") or 1.0), 0.15, 4.0), 3)
             except (TypeError, ValueError):
@@ -412,7 +455,7 @@ def compile_scene(raw: dict, index: int, start: float, duration: float, scene_wo
     actors = props_out + people_out
 
     # ---- backdrop
-    extras, explicit = _extras(raw, L, has_title, taken)
+    extras, explicit = _extras(raw, sky, L, has_title, taken)
     if table_xs:
         span_ = max(table_xs) - min(table_xs)
         extras.append({"type": "table", "x": round(sum(table_xs) / len(table_xs), 3), "y": L["table"], "width": round(max(L["table_min_width"], span_ + 0.25), 3)})
@@ -470,11 +513,57 @@ def compile_scene(raw: dict, index: int, start: float, duration: float, scene_wo
         "backdrop": backdrop,
         "camera": {"move": camera, "focusX": round(focus["x"], 3) if focus else 0.5, "focusY": 0.5},
         "actors": actors,
-        "transition": _pick(raw.get("transition"), vocab.TRANSITIONS, "tear"),
+        "transition": "tear",  # set against the previous scene in compile_story
     }
     if notes:
         scene_out["notes"] = notes
     return scene_out
+
+
+def _zoom_target(value, prev: dict) -> str | None:
+    """The thing to fly into, if the previous scene shows it."""
+    name = _slug(value)
+    if not name:
+        return None
+    backdrop = prev["backdrop"]
+    shown = [e["type"] for e in backdrop.get("extras", [])]
+    if not backdrop.get("noDefaults"):
+        shown += vocab.DEFAULT_EXTRAS.get(backdrop["sky"], ())
+    if name in vocab.ZOOM_EXTRAS and name in shown:
+        return name
+    for actor in prev.get("actors", []):
+        if "who" not in actor and name in (actor.get("prop"), actor.get("name")):
+            return name
+    return None
+
+
+def compile_transition(value, prev: dict, previous_kind: str | None = None):
+    """How a scene arrives, checked against what the previous scene shows.
+
+    fly needs the previous scene outdoors, hand needs a person in it, zoom
+    needs the thing it flies into; anything that can't be set up (or the
+    same in-picture transition twice running) becomes the tear.
+    """
+    spec = value if isinstance(value, dict) else {"type": value}
+    kind = _pick(spec.get("type"), vocab.TRANSITIONS, "tear")
+    if kind in vocab.MOTIVATED_TRANSITIONS and kind == previous_kind:
+        return "tear"
+    if kind == "fly":
+        if prev["backdrop"]["sky"] not in vocab.OUTDOOR_SKIES:
+            return "tear"
+        return {"type": "fly", "from": _pick(spec.get("from"), ("left", "right"), "left")}
+    if kind == "hand":
+        people = [a["who"] for a in prev.get("actors", []) if "who" in a]
+        if not people:
+            return "tear"
+        who = _slug(spec.get("who"))
+        return {"type": "hand", "who": who if who in people else people[0]}
+    if kind == "zoom":
+        into = _zoom_target(spec.get("into") or spec.get("target"), prev)
+        return {"type": "zoom", "into": into} if into else "tear"
+    if kind == "pull":
+        return {"type": "pull", "corner": _pick(spec.get("corner"), ("top-right", "top-left"), "top-right")}
+    return kind
 
 
 def compile_story(storyboard: dict, words: list[dict], audio_duration: float, aspect: str, narration_file: str = "narration.mp3") -> dict:
@@ -500,6 +589,11 @@ def compile_story(storyboard: dict, words: list[dict], audio_duration: float, as
         compile_scene(raw, i, start, dur, words[a:b], cast_by_id, L)
         for i, (raw, (start, dur), (a, b)) in enumerate(zip(scenes, times, spans))
     ]
+    previous_kind = None
+    for i in range(1, len(compiled)):
+        transition = compile_transition(scenes[i].get("transition"), compiled[i - 1], previous_kind)
+        compiled[i]["transition"] = transition
+        previous_kind = transition if isinstance(transition, str) else transition["type"]
     return {
         "title": str(storyboard.get("title") or "")[:100],
         "width": L["width"],

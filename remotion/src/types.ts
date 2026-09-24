@@ -6,8 +6,21 @@
 // y 0 = top, 1 = bottom. Times are seconds. Scene times are relative to the
 // scene's own start; caption word times are absolute (they come from TTS).
 
-export type Sky = "day" | "dusk" | "night" | "storm" | "parchment" | "room";
-export type Ground = "hills" | "town" | "field" | "sea" | "none";
+// Outdoor skies take any outdoor ground; interiors (room, classroom, lab,
+// hall) have their own walls and floor; space and underwater have their own
+// grounds (lunar, seabed); parchment is a plain board for fact moments.
+export type Sky =
+  | "day" | "dusk" | "night" | "storm" | "dawn"
+  | "parchment"
+  | "room" | "classroom" | "lab" | "hall"
+  | "space" | "underwater";
+export type Ground =
+  | "hills" | "town" | "field" | "sea" | "desert" | "forest" | "mountains" | "city" | "beach" | "snowfield"
+  | "lunar" | "seabed"
+  | "none";
+
+// Landmarks stand on the horizon, behind the near ground.
+export type Landmark = "pyramids" | "castle" | "temple" | "lighthouse" | "volcano";
 
 // Code-drawn props that belong to the backdrop.
 export type Extra =
@@ -19,7 +32,13 @@ export type Extra =
   | { type: "snow" }
   | { type: "window"; x?: number; y?: number; size?: number }
   | { type: "table"; x?: number; y?: number; width?: number }
-  | { type: "tree"; x: number; y?: number; size?: number };
+  | { type: "tree"; x: number; y?: number; size?: number }
+  | { type: "planet"; x?: number; y?: number; size?: number; color?: string }
+  | { type: "earth"; x?: number; y?: number; size?: number }
+  | { type: "birds"; count?: number } // a flock crossing the sky
+  | { type: "fish"; count?: number } // a school swimming past (underwater)
+  | { type: "bubbles" }
+  | { type: Landmark; x?: number; size?: number };
 
 export type Backdrop = {
   sky: Sky;
@@ -35,16 +54,29 @@ export type Skin = "light" | "fair" | "tan" | "brown" | "dark" | "deep";
 export type HairStyle =
   | "short" | "side-part" | "spiky" | "curly" | "afro" | "long" | "bob"
   | "bun" | "ponytail" | "braids" | "balding" | "bald" | "headscarf";
-export type HatStyle = "fedora" | "bowler" | "tophat" | "cap" | "crown" | "beanie" | "straw" | "helmet";
-export type TopStyle = "shirt" | "tshirt" | "sweater" | "suit" | "labcoat" | "coat" | "dress" | "robe";
-export type BottomStyle = "trousers" | "shorts" | "skirt";
-export type Accessory = "tie" | "bowtie" | "glasses" | "scarf" | "necklace" | "belt" | "apron" | "cape";
+export type HatStyle =
+  | "fedora" | "bowler" | "tophat" | "cap" | "crown" | "beanie" | "straw" | "helmet"
+  | "space-helmet" | "knight-helmet" | "nemes"; // the last three come with a character kind
+export type TopStyle =
+  | "shirt" | "tshirt" | "sweater" | "suit" | "labcoat" | "coat" | "dress" | "robe"
+  | "spacesuit" | "armor" | "bare" | "robot"; // the last four come with a character kind
+export type BottomStyle = "trousers" | "shorts" | "skirt" | "kilt";
+export type Accessory = "tie" | "bowtie" | "glasses" | "scarf" | "necklace" | "belt" | "apron" | "cape" | "collar";
+
+// A kind brings its own outfit (and for robots and animals, its own head);
+// everything else about the character still applies.
+export type Kind = "person" | "astronaut" | "knight" | "pharaoh" | "robot" | "animal";
+// Storybook animals stand, talk and wear clothes like people.
+export type Species = "fox" | "rabbit" | "bear" | "cat";
 
 // One person, defined once per story and reused in every scene so they
 // always look the same. Colours are hex strings; anything left out gets a
 // sensible default.
 export type Character = {
   id: string;
+  kind?: Kind; // default "person"
+  species?: Species; // for kind "animal"
+  fur?: string; // an animal's colour; each species has its own
   age?: "child" | "adult" | "elder";
   build?: "slim" | "average" | "broad";
   skin?: Skin | string;
@@ -132,6 +164,7 @@ export type Prop = {
   color2?: string; // second colour (liquid, label, ribbon...)
   text?: string; // sign, book cover, scroll
   shapes?: Shape[]; // for prop "shapes"
+  name?: string; // what a shapes prop is ("tower"), so a transition can find it
   aspect?: number; // for prop "shapes": width / height of its box
   mould?: boolean; // petri-dish: the blue-green mould with its clear ring
   flip?: boolean;
@@ -169,6 +202,34 @@ export type Camera = {
   amount?: number; // 1 = default strength
 };
 
+// How a scene arrives. The move straddles the cut: half of it plays over the
+// end of the previous scene, half over the start of this one.
+export type Transition =
+  | "tear" // the old page is ripped away upward
+  | "cut"
+  | { type: "tear" }
+  | { type: "cut" }
+  // A paper bird flies at the camera, fills the frame, and swoops past to
+  // reveal this scene.
+  | { type: "fly"; from?: "left" | "right"; color?: string }
+  // A person in the previous scene raises a hand to the camera; their giant
+  // palm covers the lens, then sweeps aside. `who` = a cast id in that scene.
+  | { type: "hand"; who?: string }
+  // The camera flies into a region of the previous scene (a window, a clock
+  // face, a book) and this scene is what's inside it. Frame fractions of the
+  // previous scene; depth = the layer it sits on (a window is 0.12).
+  | {
+      type: "zoom";
+      // what to fly into: "window", "sun", "moon", "planet", "earth", or a
+      // prop (its library name, or the `name` of a shapes prop)
+      into?: string;
+      // or an explicit region (frame fractions of the previous scene)
+      x?: number; y?: number; w?: number; h?: number;
+      shape?: "rect" | "circle"; depth?: number; frame?: "window";
+    }
+  // A big paper hand grabs the old page by a corner and pulls it away.
+  | { type: "pull"; corner?: "top-right" | "top-left" };
+
 export type Scene = {
   id?: string;
   duration: number;
@@ -176,7 +237,7 @@ export type Scene = {
   camera?: Camera;
   actors?: Actor[]; // drawn back to front in list order (within the same depth)
   notes?: Note[];
-  transition?: "tear" | "cut"; // how this scene arrives
+  transition?: Transition; // how this scene arrives
 };
 
 export type Word = { text: string; at: number; end?: number };
@@ -192,5 +253,8 @@ export type Story = {
   musicVolume?: number;
   words?: Word[]; // caption timing, absolute seconds
   captions?: boolean;
+  // "twos" (default): people and props move at 12 poses a second, like
+  // stop-motion. "smooth": a new pose every frame.
+  motion?: "twos" | "smooth";
   scenes: Scene[];
 };

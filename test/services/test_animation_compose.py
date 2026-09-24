@@ -107,7 +107,8 @@ class TestCompileStory(unittest.TestCase):
         scene1, scene2 = self.story["scenes"]
         self.assertEqual([a.get("who") for a in scene1["actors"]], ["fleming"])  # "ghost" is not in the cast
         self.assertEqual(scene2["backdrop"]["sky"], "day")  # "volcano" → default
-        self.assertEqual([e["type"] for e in scene2["backdrop"]["extras"]], ["window", "table"])
+        # a window only exists in a room: outdoors it is dropped with the unknown "lava"
+        self.assertEqual([e["type"] for e in scene2["backdrop"]["extras"]], ["table"])
         self.assertNotIn("spaceship", [a.get("prop") for a in scene2["actors"]])
         tilt = next(a for a in next(x for x in scene2["actors"] if x.get("prop") == "dish-stack")["actions"] if a["do"] == "tilt")
         self.assertEqual(tilt["deg"], 45)  # clamped
@@ -152,6 +153,82 @@ class TestCompileStory(unittest.TestCase):
             compose.compile_story(STORYBOARD, self.words, self.audio, "4:3")
         with self.assertRaises(ValueError):
             compose.compile_story({"scenes": []}, self.words, self.audio, "9:16")
+
+
+def two_scenes(first: dict, second: dict) -> dict:
+    """A storyboard of two scenes with words for each, compiled for 9:16."""
+    board = {"cast": [{"id": "ada"}], "scenes": [{"narration": "One two three four.", **first}, {"narration": "Five six seven eight.", **second}]}
+    words = timed_words([s["narration"] for s in board["scenes"]])
+    return compose.compile_story(board, words, words[-1]["end"] + 0.2, "9:16")
+
+
+class TestCharacterKinds(unittest.TestCase):
+    def test_kinds_and_species_pass_through_and_nonsense_is_dropped(self):
+        clean = compose.sanitize_character
+        self.assertEqual(clean({"id": "Nova", "kind": "Astronaut", "skin": "brown"}, 0), {"id": "nova", "kind": "astronaut", "skin": "brown"})
+        self.assertEqual(clean({"id": "fox", "kind": "animal", "species": "fox", "fur": "#e07a3f"}, 0), {"id": "fox", "kind": "animal", "species": "fox", "fur": "#e07a3f"})
+        self.assertEqual(clean({"id": "x", "kind": "animal", "species": "dragon"}, 0)["species"], "fox")  # unknown species → fox
+        self.assertNotIn("kind", clean({"id": "y", "kind": "wizard"}, 0))  # unknown kind → a person
+        self.assertNotIn("kind", clean({"id": "z", "kind": "person"}, 0))
+        self.assertNotIn("species", clean({"id": "k", "kind": "knight", "species": "cat"}, 0))
+
+
+class TestSettings(unittest.TestCase):
+    def scene(self, **raw):
+        return two_scenes(raw, {})["scenes"][0]["backdrop"]
+
+    def test_each_setting_gets_a_ground_that_fits(self):
+        self.assertEqual(self.scene(sky="classroom", ground="desert")["ground"], "none")  # interiors have a floor
+        self.assertEqual(self.scene(sky="underwater", ground="hills")["ground"], "seabed")
+        self.assertEqual(self.scene(sky="space", people=[{"who": "ada"}])["ground"], "lunar")  # somewhere to stand
+        self.assertEqual(self.scene(sky="space")["ground"], "none")
+        self.assertEqual(self.scene(sky="dawn", ground="forest")["ground"], "forest")
+        self.assertEqual(self.scene(sky="dusk", ground="seabed")["ground"], "hills")  # not an outdoor ground
+
+    def test_extras_belong_to_their_setting_and_one_landmark_stands_clear_of_people(self):
+        outdoor = self.scene(sky="day", ground="desert", extras=["pyramids", "castle", "fish", "birds"], people=[{"who": "ada", "place": "left"}])
+        self.assertEqual([e["type"] for e in outdoor["extras"]], ["pyramids", "birds"])
+        self.assertEqual(outdoor["extras"][0]["x"], 0.7)  # across from Ada
+        space = self.scene(sky="space", extras=["planet", "earth", "clouds"])
+        self.assertEqual([(e["type"], e["x"]) for e in space["extras"]], [("planet", 0.76), ("earth", 0.26)])
+        self.assertEqual([e["type"] for e in self.scene(sky="underwater", extras=["fish", "sun"])["extras"]], ["fish"])
+
+
+class TestTransitions(unittest.TestCase):
+    def arrive(self, first: dict, transition) -> object:
+        return two_scenes(first, {"transition": transition})["scenes"][1]["transition"]
+
+    def test_in_picture_transitions_when_the_previous_scene_sets_them_up(self):
+        outdoors = {"sky": "day", "people": [{"who": "ada", "place": "left"}]}
+        self.assertEqual(self.arrive(outdoors, {"type": "fly", "from": "right"}), {"type": "fly", "from": "right"})
+        self.assertEqual(self.arrive(outdoors, {"type": "hand", "who": "nobody"}), {"type": "hand", "who": "ada"})
+        self.assertEqual(self.arrive(outdoors, {"type": "zoom", "into": "sun"}), {"type": "zoom", "into": "sun"})  # a day sky has one
+        self.assertEqual(self.arrive({"sky": "room"}, {"type": "zoom", "into": "window"}), {"type": "zoom", "into": "window"})
+        clock = {"sky": "parchment", "props": [{"prop": "clock", "size": "hero"}]}
+        self.assertEqual(self.arrive(clock, {"type": "zoom", "into": "clock"}), {"type": "zoom", "into": "clock"})
+        self.assertEqual(self.arrive({"sky": "lab"}, {"type": "pull"}), {"type": "pull", "corner": "top-right"})
+        self.assertEqual(self.arrive(outdoors, "cut"), "cut")
+
+    def test_anything_the_previous_scene_cannot_set_up_becomes_the_tear(self):
+        self.assertEqual(self.arrive({"sky": "room", "people": [{"who": "ada"}]}, {"type": "fly"}), "tear")  # no bird indoors
+        self.assertEqual(self.arrive({"sky": "day"}, {"type": "hand"}), "tear")  # nobody to raise a hand
+        self.assertEqual(self.arrive({"sky": "day"}, {"type": "zoom", "into": "window"}), "tear")  # no window outdoors
+        self.assertEqual(self.arrive({"sky": "day"}, "teleport"), "tear")
+
+    def test_the_same_one_is_not_used_twice_running(self):
+        board = {
+            "cast": [{"id": "ada"}],
+            "scenes": [
+                {"narration": "One two.", "sky": "day"},
+                {"narration": "Three four.", "sky": "day", "transition": {"type": "fly"}},
+                {"narration": "Five six.", "sky": "day", "transition": {"type": "fly"}},
+                {"narration": "Seven eight.", "sky": "day", "transition": {"type": "pull"}},
+            ],
+        }
+        words = timed_words([s["narration"] for s in board["scenes"]])
+        story = compose.compile_story(board, words, words[-1]["end"] + 0.2, "9:16")
+        kinds = [t if isinstance(t, str) else t["type"] for t in (s["transition"] for s in story["scenes"][1:])]
+        self.assertEqual(kinds, ["fly", "tear", "pull"])
 
 
 if __name__ == "__main__":

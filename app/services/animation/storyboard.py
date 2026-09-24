@@ -68,9 +68,8 @@ Format: {orientation}.
   when the video replays: keep it exactly as written, as the final scene.
 
 # Staging rules
-- Each scene: one backdrop, at most 3 people and 3 props. Vary backdrops.
-  Use "parchment" (a plain paper board) for close-up fact moments, "room"
-  for interiors, outdoor skies otherwise.
+- Each scene: one setting (sky + ground), at most 3 people and 3 props.
+  Vary settings, and pick ones that suit the video (see Settings).
 - People are defined once in "cast" and keep the same look in every scene.
   An outfit change = a second cast entry copying the face/hair/skin.
 - Every action and note is timed by a "cue": one word copied exactly from
@@ -83,13 +82,58 @@ Format: {orientation}.
   "70%"), a "label" to name a person or object on screen (target = a cast id
   or a prop name in that scene).
 
+# Settings
+sky, outdoors: {_opts(vocab.OUTDOOR_SKIES)}
+  with a ground: {_opts(vocab.OUTDOOR_GROUNDS)}
+sky, indoors (no ground): room (a home, with a window) | classroom (a
+  chalkboard) | lab (shelves of flasks) | hall (a castle hall: stone,
+  banners, torches)
+sky "space": ground "lunar" (the Moon's surface) or "none"
+sky "underwater": its own seabed (no ground needed)
+sky "parchment": a plain paper board for close-up fact moments (no ground)
+extras (optional; listing any replaces the setting's defaults):
+  outdoors: {_opts(vocab.SKY_EXTRAS)}
+  one landmark on the horizon: {_opts(vocab.LANDMARKS)}
+  room: window · space: {_opts(vocab.SPACE_EXTRAS)} · underwater: {_opts(vocab.UNDERWATER_EXTRAS)}
+What suits what:
+  moral stories: town (a village), field, forest, hills, room; dawn and
+    dusk for mood; fables cast animals (a sly fox, a quick rabbit...)
+  history: desert + pyramids (a pharaoh), hills + castle and hall (a
+    knight), field + temple, sea or beach (+ boat, lighthouse), parchment
+    for dates and maps
+  science and facts: space (+ lunar, planet, earth; an astronaut),
+    underwater, lab (a robot or a scientist in a labcoat), classroom, city,
+    mountains or volcano, parchment for numbers
+
+# Transitions (how each scene after the first arrives)
+"tear" (the old page rips away; the default) or "cut" (instant, for a
+punchline or a sharp contrast). The rest happen inside the picture, so the
+PREVIOUS scene has to set them up:
+- {{"type": "fly", "from": "left"}} (or "right"): a paper bird swoops at the
+  camera and carries the cut. The previous scene must be outdoors. Good for
+  travel, a new place, time passing.
+- {{"type": "hand", "who": "<cast id>"}}: someone in the previous scene raises a
+  hand to the camera and their palm covers the cut. Good after they speak,
+  or for "but", "stop", a reveal.
+- {{"type": "zoom", "into": "<thing>"}}: the camera flies into something in the
+  previous scene and this scene is what's inside or beyond it: "window" (in
+  a room), "sun", "moon", "planet", "earth", or a prop in that scene: a
+  clock for a time jump, a globe for a place, a book, scroll or letter into
+  the story, a phone or laptop into the screen, or a custom prop's name.
+- {{"type": "pull"}}: a paper hand pulls the old page away like a card. Good
+  before a parchment fact card or a big reveal.
+In a video with 4 or more scenes, at least 2 changes should use fly, hand,
+zoom or pull, each because the picture sets it up. Never the same one twice
+in a row.
+
 # Options (use exactly these words)
-sky: {_opts(vocab.SKIES)}
-ground (ignored for parchment/room): {_opts(vocab.GROUNDS)}
-extras: {_opts(vocab.EXTRAS)}
 camera: {_opts(vocab.CAMERAS)}
-transition (how a scene arrives): {_opts(vocab.TRANSITIONS)}
 place: {_opts(vocab.PLACES)}
+cast.kind (optional): person (default) | astronaut | knight | pharaoh | robot | animal
+  astronaut, knight and pharaoh come dressed (a knight's tabard takes
+  top.color); a robot is metal (top.color tints it); an animal is a
+  storybook animal that stands, talks and wears clothes: give "species":
+  {_opts(vocab.SPECIES)} and dress it with top/bottom/hat as usual
 cast.age: {_opts(vocab.AGES)} · build: {_opts(vocab.BUILDS)} · skin: {_opts(vocab.SKINS)}
 cast.hair.style: {_opts(vocab.HAIR)}
 cast.facialHair: {_opts(vocab.FACIAL_HAIR)}
@@ -151,6 +195,12 @@ Respond ONLY with JSON in this shape:
         {{"kind": "stamp", "text": "1843", "cue": "1843"}},
         {{"kind": "label", "text": "Ada Lovelace", "target": "ada", "cue": "Ada"}}
       ]
+    }},
+    {{
+      "narration": "Inside, her notes described a machine that could weave numbers.",
+      "sky": "parchment", "camera": "still",
+      "transition": {{"type": "zoom", "into": "book"}},
+      "people": [], "props": [], "notes": []
     }}
   ]
 }}

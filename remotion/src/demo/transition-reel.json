@@ -1,0 +1,308 @@
+{
+ "title": "Transition reel",
+ "width": 1080,
+ "height": 1920,
+ "fps": 24,
+ "captions": false,
+ "cast": [
+  {
+   "id": "ada",
+   "age": "adult",
+   "build": "slim",
+   "skin": "brown",
+   "hair": {
+    "style": "curly",
+    "color": "#2a1d17"
+   },
+   "top": {
+    "style": "dress",
+    "color": "#2f8f83"
+   },
+   "bottom": {
+    "style": "skirt",
+    "color": "#23395b"
+   },
+   "accessories": [
+    "necklace"
+   ],
+   "accent": "#e8913a"
+  },
+  {
+   "id": "tomas",
+   "age": "adult",
+   "build": "broad",
+   "skin": "fair",
+   "hair": {
+    "style": "short",
+    "color": "#6b4a2f"
+   },
+   "facialHair": "beard",
+   "top": {
+    "style": "sweater",
+    "color": "#c0473f"
+   },
+   "bottom": {
+    "style": "trousers",
+    "color": "#3d405b"
+   }
+  }
+ ],
+ "scenes": [
+  {
+   "id": "start",
+   "duration": 3.4,
+   "backdrop": {
+    "sky": "day",
+    "ground": "hills",
+    "extras": [
+     {
+      "type": "clouds"
+     }
+    ]
+   },
+   "camera": {
+    "move": "drift"
+   },
+   "actors": [
+    {
+     "who": "ada",
+     "x": 0.3,
+     "y": 0.705,
+     "facing": "right",
+     "enter": {
+      "type": "pop",
+      "at": 0.2
+     },
+     "actions": [
+      {
+       "do": "talk",
+       "at": 0.6,
+       "dur": 2.0
+      },
+      {
+       "do": "look",
+       "at": 2.2,
+       "dir": "up"
+      }
+     ]
+    }
+   ],
+   "notes": [
+    {
+     "kind": "title",
+     "text": "Test reel",
+     "sub": "paper transitions",
+     "at": 0.35
+    }
+   ]
+  },
+  {
+   "id": "fly",
+   "duration": 3.4,
+   "transition": {
+    "type": "fly",
+    "from": "left"
+   },
+   "backdrop": {
+    "sky": "dusk",
+    "ground": "field"
+   },
+   "camera": {
+    "move": "push",
+    "focusX": 0.62,
+    "focusY": 0.55
+   },
+   "actors": [
+    {
+     "who": "tomas",
+     "x": 0.66,
+     "y": 0.705,
+     "facing": "left",
+     "actions": [
+      {
+       "do": "talk",
+       "at": 0.8,
+       "dur": 1.6
+      }
+     ]
+    }
+   ],
+   "notes": [
+    {
+     "kind": "title",
+     "text": "Fly-through",
+     "sub": "a bird carries the cut",
+     "at": 0.35
+    }
+   ]
+  },
+  {
+   "id": "hand",
+   "duration": 3.8,
+   "transition": {
+    "type": "hand",
+    "who": "tomas"
+   },
+   "backdrop": {
+    "sky": "room",
+    "extras": [
+     {
+      "type": "window",
+      "x": 0.5,
+      "y": 0.3,
+      "size": 1.3
+     },
+     {
+      "type": "table",
+      "x": 0.7,
+      "y": 0.632,
+      "width": 0.45
+     }
+    ],
+    "noDefaults": true
+   },
+   "camera": {
+    "move": "drift"
+   },
+   "actors": [
+    {
+     "prop": "cup",
+     "x": 0.66,
+     "y": 0.632,
+     "height": 0.06,
+     "idle": "still"
+    },
+    {
+     "who": "ada",
+     "x": 0.26,
+     "y": 0.705,
+     "facing": "right",
+     "actions": [
+      {
+       "do": "look",
+       "at": 1.6,
+       "dir": "up"
+      },
+      {
+       "do": "point",
+       "at": 2.2,
+       "dur": 1.2
+      }
+     ]
+    }
+   ],
+   "notes": [
+    {
+     "kind": "title",
+     "text": "Hand to lens",
+     "sub": "his palm covers the cut",
+     "at": 0.35
+    }
+   ]
+  },
+  {
+   "id": "zoom",
+   "duration": 3.6,
+   "transition": {
+    "type": "zoom",
+    "into": "window"
+   },
+   "backdrop": {
+    "sky": "day",
+    "ground": "hills",
+    "extras": [
+     {
+      "type": "sun",
+      "x": 0.78,
+      "y": 0.2
+     },
+     {
+      "type": "clouds"
+     },
+     {
+      "type": "tree",
+      "x": 0.18
+     }
+    ],
+    "noDefaults": true
+   },
+   "camera": {
+    "move": "pull"
+   },
+   "actors": [
+    {
+     "prop": "house",
+     "x": 0.66,
+     "y": 0.72,
+     "height": 0.2,
+     "idle": "still"
+    }
+   ],
+   "notes": [
+    {
+     "kind": "title",
+     "text": "Zoom-through",
+     "sub": "into the window",
+     "at": 0.35
+    }
+   ]
+  },
+  {
+   "id": "pull",
+   "duration": 3.2,
+   "transition": {
+    "type": "pull",
+    "corner": "top-right"
+   },
+   "backdrop": {
+    "sky": "parchment"
+   },
+   "camera": {
+    "move": "still"
+   },
+   "actors": [
+    {
+     "prop": "star",
+     "x": 0.5,
+     "y": 0.6,
+     "height": 0.22,
+     "idle": "breathe",
+     "enter": {
+      "type": "pop",
+      "at": 0.4
+     }
+    }
+   ],
+   "notes": [
+    {
+     "kind": "title",
+     "text": "Hand pull",
+     "sub": "the page is taken away",
+     "at": 0.35
+    }
+   ]
+  },
+  {
+   "id": "tear",
+   "duration": 2.8,
+   "transition": "tear",
+   "backdrop": {
+    "sky": "night",
+    "ground": "town"
+   },
+   "camera": {
+    "move": "drift"
+   },
+   "notes": [
+    {
+     "kind": "title",
+     "text": "Tear",
+     "sub": "today's default",
+     "at": 0.35
+    }
+   ]
+  }
+ ],
+ "narration": "",
+ "words": []
+}

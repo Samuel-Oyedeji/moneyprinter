@@ -20,8 +20,14 @@ export type Movable = {
 };
 
 // Puppets move "on twos" (12 poses a second at 24fps): the handmade feel.
+// A story can ask for smooth motion instead (a new pose every frame); one
+// render draws one story, so the setting is module-wide.
 export const STEP = 1 / 12;
-export const onTwos = (t: number) => Math.floor(t / STEP + 1e-6) * STEP;
+let step = STEP;
+export const setMotion = (mode: "twos" | "smooth" | undefined) => {
+  step = mode === "smooth" ? 0 : STEP;
+};
+export const onTwos = (t: number) => (step ? Math.floor(t / step + 1e-6) * step : t);
 
 export type Pose = {
   dx: number; // px

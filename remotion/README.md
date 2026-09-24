@@ -53,6 +53,8 @@ top→bottom). Times are seconds from the scene's start.
 
 | Field | Options |
 | --- | --- |
+| `kind` | `person` (default) · `astronaut` (suit, bubble helmet, backpack) · `knight` (armour, plumed helmet; the tabard takes `top.color`) · `pharaoh` (headcloth, broad collar, kilt, royal beard) · `robot` (metal, LED face; `top.color` tints it) · `animal` (a storybook animal that stands, talks and wears clothes) |
+| `species` | for `animal`: `fox` `rabbit` `bear` `cat` (`fur` overrides the colour) |
 | `age` | `child` `adult` `elder` |
 | `build` | `slim` `average` `broad` |
 | `skin` | `light` `fair` `tan` `brown` `dark` `deep` or a hex colour |
@@ -70,9 +72,9 @@ An outfit change is a second cast entry with the same face, hair and skin (see
 
 | Scene field | Options |
 | --- | --- |
-| `backdrop.sky` | `day` `dusk` `night` `storm` `parchment` (a plain board for facts) `room` (an interior) |
-| `backdrop.ground` | `hills` `town` `field` `sea` `none` |
-| `backdrop.extras` | `sun` `moon` `stars` `clouds` `rain` `snow` `window` `table` `tree` |
+| `backdrop.sky` | outdoors: `day` `dusk` `night` `storm` `dawn` · interiors: `room` `classroom` `lab` `hall` · `space` · `underwater` · `parchment` (a plain board for facts) |
+| `backdrop.ground` | outdoors: `hills` `town` `field` `sea` `desert` `forest` `mountains` `city` `beach` `snowfield` · space: `lunar` · underwater: `seabed` (automatic) · `none` |
+| `backdrop.extras` | `sun` `moon` `stars` `clouds` `rain` `snow` `tree` `birds` `window` `table` `planet` `earth` `fish` `bubbles`, and one landmark on the horizon: `pyramids` `castle` `temple` `lighthouse` `volcano` |
 | `camera.move` | `drift` (default) `push` `pull` `pan-left` `pan-right` `rise` `still` |
 | `actors[]` (person) | `who`, `x`, `y` (feet), `height`, `facing` (`left` `right` `front`), `face`, `holding` (a prop, carried `down` or held `up`) |
 | person `face` | `smile` `grin` `neutral` `frown` `surprised` `worried` `angry` `sleepy` |
@@ -80,7 +82,7 @@ An outfit change is a second cast entry with the same face, hair and skin (see
 | `actors[]` (prop) | `prop`, `x`, `y` (bottom), `height`, `color`, `color2`, `text`; `idle` `breathe` `sway` `float` `still`; actions `hop` `walk` `turn` `shake` `nod` `grow` `tilt` |
 | `enter` / `exit` | `pop` `slide-left` `slide-right` (people walk in) `drop` `flip` / `fold` `slide-left` `slide-right` `fly-up` |
 | `notes[]` | `title` (banner + sub-line), `stamp` (badge; `count` rolls a number up), `label` (tag on a string pinned to a point) |
-| `transition` | `tear` (default) or `cut` |
+| `transition` | `tear` (default), `cut`, or one that happens inside the picture: `{type: "fly"}` (a paper bird flies into the lens), `{type: "hand", who}` (a person's palm covers the camera), `{type: "zoom", into}` (fly into a window, the sun, moon, a planet or a prop), `{type: "pull"}` (a hand pulls the page away) |
 
 **Props:** book, scroll, letter, coin, moneybag, crown, sword, flag, candle,
 bottle, pills, cup, flask, petri-dish, dish-stack, microscope, apple, basket,
@@ -88,6 +90,9 @@ bucket, chest, key, clock, hourglass, globe, lightbulb, heart, star, trophy,
 gift, suitcase, umbrella, house, boat, rock, well, sign, chair, plant, phone,
 laptop and arrow. Anything else is a `shapes` prop built from rects, circles,
 ellipses and polygons in its own box.
+
+`npm run studio` also has the transition test reel: load
+`src/demo/transition-reel.json` as the PaperStory props.
 
 ## Layout rules for 9:16
 
@@ -107,5 +112,7 @@ ellipses and polygons in its own box.
 - `src/puppet/`: people (`character.ts` options and proportions, `pose.ts`
   acting, `draw.ts` the paper cut).
 - `src/props/library.ts`: every prop.
-- `src/components/`: backdrop, actors, notes, captions, grain, scene and tear.
+- `src/components/`: backdrop (and `scenery.ts`: the newer settings, grounds,
+  landmarks and life), actors, notes, captions, grain, scene, and
+  `Transitions.tsx` (the tear's in-picture siblings).
 - `src/demo/`: the demo story ("The Messy Lab") and the cast and prop sheets.

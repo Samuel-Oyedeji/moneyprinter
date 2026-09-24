@@ -4,12 +4,41 @@ The storyboard prompt lists these options and the compiler drops anything
 outside them, so an LLM typo can never reach the renderer.
 """
 
-SKIES = ("day", "dusk", "night", "storm", "parchment", "room")
-GROUNDS = ("hills", "town", "field", "sea", "none")
-EXTRAS = ("sun", "moon", "stars", "clouds", "rain", "snow", "window", "tree")
+OUTDOOR_SKIES = ("day", "dusk", "night", "storm", "dawn")
+INTERIORS = ("room", "classroom", "lab", "hall")
+SKIES = OUTDOOR_SKIES + ("parchment",) + INTERIORS + ("space", "underwater")
+OUTDOOR_GROUNDS = ("hills", "town", "field", "sea", "desert", "forest", "mountains", "city", "beach", "snowfield")
+SPACE_GROUNDS = ("lunar", "none")
+GROUNDS = OUTDOOR_GROUNDS + ("lunar", "seabed", "none")
+LANDMARKS = ("pyramids", "castle", "temple", "lighthouse", "volcano")
+# Which extras each kind of setting can show.
+SKY_EXTRAS = ("sun", "moon", "stars", "clouds", "rain", "snow", "tree", "birds")
+OUTDOOR_EXTRAS = SKY_EXTRAS + LANDMARKS
+SPACE_EXTRAS = ("stars", "planet", "earth", "sun", "moon")
+UNDERWATER_EXTRAS = ("fish", "bubbles")
+EXTRAS = tuple(dict.fromkeys(OUTDOOR_EXTRAS + ("window",) + SPACE_EXTRAS + UNDERWATER_EXTRAS))
+# What each setting shows when the storyboard names no extras (mirrors
+# defaultExtras in remotion/src/kit/palettes.ts).
+DEFAULT_EXTRAS = {
+    "day": ("sun", "clouds"),
+    "dusk": ("sun", "clouds"),
+    "night": ("stars", "moon"),
+    "storm": ("clouds", "rain"),
+    "dawn": ("sun", "clouds", "birds"),
+    "room": ("window",),
+    "space": ("stars", "planet"),
+    "underwater": ("fish", "bubbles"),
+}
 CAMERAS = ("drift", "push", "pull", "pan-left", "pan-right", "rise", "still")
-TRANSITIONS = ("tear", "cut")
+# tear/cut, and the ones that happen inside the picture
+TRANSITIONS = ("tear", "cut", "fly", "hand", "zoom", "pull")
+MOTIVATED_TRANSITIONS = ("fly", "hand", "zoom", "pull")
+# Things a zoom can fly into besides a prop in the previous scene.
+ZOOM_EXTRAS = ("window", "sun", "moon", "planet", "earth")
 
+# A kind brings its own outfit (robots and animals their own heads too).
+KINDS = ("person", "astronaut", "knight", "pharaoh", "robot", "animal")
+SPECIES = ("fox", "rabbit", "bear", "cat")
 AGES = ("child", "adult", "elder")
 BUILDS = ("slim", "average", "broad")
 SKINS = ("light", "fair", "tan", "brown", "dark", "deep")

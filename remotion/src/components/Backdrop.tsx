@@ -2,7 +2,23 @@ import React, { useMemo } from "react";
 import type { Backdrop as BackdropSpec, Extra } from "../types";
 import { Layer } from "../kit/camera";
 import { onTwos } from "../kit/motion";
-import { defaultExtras, Palette, PALETTES } from "../kit/palettes";
+import { defaultExtras, INTERIORS, PALETTES } from "../kit/palettes";
+import {
+  birdsDraw,
+  bubblesDraw,
+  classroomWall,
+  earthDraw,
+  extraGroundPlanes,
+  fishDraw,
+  hallWall,
+  labWall,
+  landmarkDraw,
+  lightRays,
+  nebula,
+  planetDraw,
+} from "./scenery";
+import type { Ctx, Draw, Plane } from "./scenery";
+import type { Landmark } from "../types";
 import { DrawFn, OVERSCAN, PaperCanvas } from "../kit/PaperCanvas";
 import {
   blobPts,
@@ -23,11 +39,7 @@ import {
 const M = OVERSCAN;
 const L = -M; // left edge of the drawable area
 
-// Scene time from the sequence frame (scenes start a little early so the
-// transition can reveal them).
-type Ctx = { pal: Palette; seed: number; lead: number };
-type Draw = (ctx: CanvasRenderingContext2D, t: number, b: number, W: number, H: number) => void;
-type Plane = { depth: number; draw: Draw; key: string };
+const LANDMARKS: Landmark[] = ["pyramids", "castle", "temple", "lighthouse", "volcano"];
 
 // ------------------------------------------------------------------ skies
 
@@ -44,6 +56,10 @@ function skyPlane(sky: BackdropSpec["sky"], c: Ctx): Draw {
       }
       return;
     }
+    if (sky === "classroom") return classroomWall(c)(ctx, t, b, W, H);
+    if (sky === "lab") return labWall(c)(ctx, t, b, W, H);
+    if (sky === "hall") return hallWall(c)(ctx, t, b, W, H);
+    if (sky === "space") return nebula(c)(ctx, t, b, W, H);
     pal.bands.forEach((band, i) => {
       const y = band.y * H;
       const h = band.h * H;
@@ -56,15 +72,16 @@ function skyPlane(sky: BackdropSpec["sky"], c: Ctx): Draw {
       ];
       paper(ctx, pts, band.c, seed + 2000 + i * 97 + b, { edge: 5, rough: 10, texture: 1 });
     });
+    if (sky === "underwater") lightRays(c)(ctx, t, b, W, H);
   };
 }
 
-function starsDraw(c: Ctx): Draw {
+function starsDraw(c: Ctx, everywhere = false): Draw {
   return (ctx, t, b, W, H) => {
     const sr = rng(77 + c.seed);
-    for (let i = 0; i < 34; i++) {
+    for (let i = 0; i < (everywhere ? 80 : 34); i++) {
       const x = L + sr() * (W + 2 * M);
-      const y = L + sr() * (H * 0.5 - L);
+      const y = L + sr() * ((everywhere ? H + M : H * 0.5) - L);
       const ph = sr() * 6;
       const s = 3 + 3 * (0.5 + 0.5 * Math.sin(onTwos(t) * 3 + ph));
       ctx.fillStyle = c.pal.star;
@@ -241,6 +258,8 @@ function treeDraw(e: Extract<Extra, { type: "tree" }>, c: Ctx, i: number): Draw 
 
 function groundPlanes(ground: string, c: Ctx): Plane[] {
   const { pal, seed } = c;
+  const extra = extraGroundPlanes(ground, c);
+  if (extra) return extra;
   if (ground === "hills") {
     return [
       { key: "hill-far", depth: 0.35, draw: (ctx, t, b, W, H) => paper(ctx, hillPts(L, W + M, H * 0.52, 70, seed + 1, H + M), pal.hills[0], 7000 + b, { edge: 6, rough: 4, texture: 1 }) },
@@ -361,22 +380,38 @@ export function buildPlanes(spec: BackdropSpec, lead: number): { back: Plane[]; 
 
   extras.forEach((e, i) => {
     const key = `${e.type}-${i}`;
-    if (e.type === "stars") back.push({ key, depth: 0.1, draw: starsDraw(c) });
+    if (e.type === "stars") back.push({ key, depth: 0.1, draw: starsDraw(c, spec.sky === "space") });
+    if (e.type === "planet") back.push({ key, depth: 0.12, draw: planetDraw(e, c) });
+    if (e.type === "earth") back.push({ key, depth: 0.12, draw: earthDraw(e, c) });
     if (e.type === "moon") back.push({ key, depth: 0.14, draw: moonDraw(e, c) });
     if (e.type === "sun") back.push({ key, depth: 0.16, draw: sunDraw(e, c) });
     if (e.type === "clouds") back.push({ key, depth: 0.22, draw: cloudsDraw(e.count ?? 3, c) });
+    if (e.type === "birds") back.push({ key, depth: 0.25, draw: birdsDraw(e.count ?? 4, c, spec.sky) });
     if (e.type === "window") back.push({ key, depth: 0.12, draw: windowDraw(e, c) });
   });
 
-  if (spec.sky === "room") back.push(roomFloor(c));
-  else if (spec.sky !== "parchment") back.push(...groundPlanes(spec.ground ?? "hills", c));
+  if (INTERIORS.includes(spec.sky)) back.push(roomFloor(c));
+  else if (spec.sky !== "parchment") {
+    const ground = spec.sky === "underwater" ? "seabed" : spec.ground ?? (spec.sky === "space" ? "none" : "hills");
+    const planes = groundPlanes(ground, c);
+    // landmarks stand behind everything but the far ground layer
+    const marks: Plane[] = [];
+    extras.forEach((e, i) => {
+      if ((LANDMARKS as string[]).includes(e.type)) {
+        marks.push({ key: `${e.type}-${i}`, depth: 0.42, draw: landmarkDraw(e as { type: Landmark; x?: number; size?: number }, c) });
+      }
+    });
+    back.push(...planes.slice(0, 1), ...marks, ...planes.slice(1));
+  }
 
   extras.forEach((e, i) => {
     const key = `${e.type}-${i}`;
     if (e.type === "tree") back.push({ key, depth: 0.9, draw: treeDraw(e, c, i) });
     if (e.type === "table") back.push({ key, depth: 1, draw: tableDraw(e, c) });
+    if (e.type === "fish") back.push({ key, depth: 0.9, draw: fishDraw(e.count ?? 5, c) });
     if (e.type === "rain") front.push({ key, depth: 1.15, draw: rainDraw(c) });
     if (e.type === "snow") front.push({ key, depth: 1.15, draw: snowDraw(c) });
+    if (e.type === "bubbles") front.push({ key, depth: 1.1, draw: bubblesDraw(c) });
   });
 
   return { back, front };
