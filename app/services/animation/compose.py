@@ -13,6 +13,7 @@ from app.services.animation import vocab
 FPS = 24
 LEAD = 0.3  # a scene starts this long before its first word
 TAIL = 0.9  # hold after the last word
+LOOP_TAIL = 0.15  # a script ending in "..." flows straight back into its first line
 MIN_SCENE = 1.2
 
 LAYOUTS = {
@@ -149,14 +150,26 @@ def scene_word_spans(scenes: list[dict], words: list[dict]) -> list[tuple[int, i
     return spans
 
 
+def ends_in_loop(words: list[dict]) -> bool:
+    """The script's last word trails off ("...") to loop into its first line."""
+    return bool(words) and str(words[-1]["text"]).rstrip().endswith(("...", "…"))
+
+
 def scene_times(spans, words, audio_duration: float) -> list[tuple[float, float]]:
-    """(start, duration) per scene: cut just before each scene's first word."""
+    """(start, duration) per scene: cut just before each scene's first word.
+
+    The video holds for TAIL after the narration, or, for a loop ending, cuts
+    LOOP_TAIL after the last word so the replay picks the sentence up.
+    """
     starts = [0.0]
     for a, b in spans[1:]:
         at = words[a]["at"] - LEAD if a < len(words) else starts[-1] + MIN_SCENE
         starts.append(max(starts[-1] + MIN_SCENE, at))
     last_word_end = max((w.get("end", w["at"]) for w in words), default=0.0)
-    end = max(audio_duration, last_word_end) + TAIL
+    if ends_in_loop(words):
+        end = last_word_end + LOOP_TAIL
+    else:
+        end = max(audio_duration, last_word_end) + TAIL
     end = max(end, starts[-1] + MIN_SCENE)
     times = []
     for i, s in enumerate(starts):

@@ -1,13 +1,15 @@
-"""Topic → finished animation, in four resumable stages.
+"""Topic → finished animation, in five resumable stages.
 
-    storyboard  LLM writes narration + staging          storyboard.json
+    script      script model writes the narration       script.json
+    storyboard  writer model splits it into scenes      storyboard.json
+                and stages them
     voice       ElevenLabs narration with word timings  public/narration.mp3, words.json
     render      compile to a Remotion story, render     story.json, final.mp4, thumb.jpg
     package     YouTube title/description/hashtags      project.json["youtube"]
 
 Each stage is skipped when its output already exists, so a retry after a
 failure picks up where the run stopped (a render failure does not pay for
-the storyboard or the voice-over again).
+the script, the storyboard or the voice-over again).
 """
 
 import os
@@ -15,9 +17,9 @@ import os
 from loguru import logger
 
 from app.config import config
-from app.services.animation import compose, metadata, render, store, storyboard, tts
+from app.services.animation import compose, llm, metadata, render, script, store, storyboard, tts
 
-STAGES = ("storyboard", "voice", "render", "package")
+STAGES = ("script", "storyboard", "voice", "render", "package")
 
 
 def default_voice() -> str:
@@ -30,6 +32,7 @@ def reset_from(project_id: str, stage: str) -> dict:
         raise ValueError(f"unknown stage {stage!r}")
     drop = STAGES[STAGES.index(stage):]
     files = {
+        "script": ["script.json"],
         "storyboard": ["storyboard.json"],
         "voice": ["words.json", os.path.join("public", "narration.mp3")],
         "render": ["story.json", "final.mp4", "thumb.jpg"],
@@ -63,17 +66,32 @@ def run_project(project_id: str, on_stage=None, render_scale: float | None = Non
     def cost(kind: str):
         return lambda amount: store.add_cost(project_id, kind, amount)
 
-    try:
-        # 1 · storyboard
-        board = store.read_json(store.path(project_id, "storyboard.json"))
-        if not board:
-            stage(store.STATUS_WRITING, "Writing the storyboard…", 0.05)
-            board = storyboard.write_storyboard(
-                project["topic"], project.get("context", ""), project["seconds"], project["aspect"], on_cost=cost("llm")
-            )
-            store.write_json(store.path(project_id, "storyboard.json"), board)
+    def used(role: str):
+        models = {**(store.load_project(project_id).get("models") or {}), role: llm.model_for(role)}
+        store.update_project(project_id, models=models)
 
-        # 2 · voice-over with word timings
+    try:
+        board = store.read_json(store.path(project_id, "storyboard.json"))
+        # 1 · script (older projects have a storyboard and no script: keep it)
+        written = store.read_json(store.path(project_id, "script.json"))
+        if not written and not board:
+            stage(store.STATUS_SCRIPTING, "Writing the script…", 0.03)
+            written = script.write_script(project["topic"], project.get("context", ""), project["seconds"], on_cost=cost("llm"))
+            store.write_json(store.path(project_id, "script.json"), written)
+            used("script")
+
+        # 2 · storyboard: scenes + staging for that exact script
+        if not board:
+            stage(store.STATUS_WRITING, "Directing the scenes…", 0.08)
+            board = storyboard.write_storyboard(
+                project["topic"], project.get("context", ""), written["text"], project["aspect"], on_cost=cost("llm")
+            )
+            if written.get("title"):
+                board["title"] = written["title"]  # the scriptwriter's title is the working title
+            store.write_json(store.path(project_id, "storyboard.json"), board)
+            used("writer")
+
+        # 3 · voice-over with word timings
         narration_path = os.path.join(store.public_dir(project_id), "narration.mp3")
         voice_data = store.read_json(store.path(project_id, "words.json"))
         if not voice_data or not os.path.isfile(narration_path):
@@ -86,7 +104,7 @@ def run_project(project_id: str, on_stage=None, render_scale: float | None = Non
             if result["cost"]:
                 store.add_cost(project_id, "tts", result["cost"])
 
-        # 3 · compile + render
+        # 4 · compile + render
         final = store.final_path(project_id)
         if not os.path.isfile(final):
             story = compose.compile_story(board, voice_data["words"], voice_data["duration"], project["aspect"])
@@ -106,7 +124,7 @@ def run_project(project_id: str, on_stage=None, render_scale: float | None = Non
             render.extract_frame(final, store.thumb_path(project_id), duration * 0.4)
             store.update_project(project_id, duration=duration, title=story.get("title", ""))
 
-        # 4 · YouTube metadata
+        # 5 · YouTube metadata (the writer model)
         project = store.load_project(project_id)
         if not (project.get("youtube") or {}).get("generated"):
             stage(store.STATUS_PACKAGING, "Writing the YouTube title & description…", 0.95)

@@ -79,6 +79,14 @@ class TestCompileStory(unittest.TestCase):
         total = compose.story_duration(self.story)
         self.assertAlmostEqual(total, self.audio + compose.TAIL, places=2)
 
+    def test_a_loop_ending_cuts_straight_back_to_the_start(self):
+        # "...the edge of..." replays into the first line, so no hold at the end
+        words = [dict(w) for w in self.words]
+        words[-1]["text"] = words[-1]["text"].rstrip(".!?") + "..."
+        audio = words[-1]["end"] + 0.6  # trailing silence in the file is cut too
+        story = compose.compile_story(STORYBOARD, words, audio, "9:16")
+        self.assertAlmostEqual(compose.story_duration(story), words[-1]["end"] + compose.LOOP_TAIL, places=2)
+
     def test_actions_land_on_their_cue_word(self):
         fleming = next(a for a in self.story["scenes"][0]["actors"] if a.get("who") == "fleming")
         home = next(w for w in self.words if w["text"] == "home.")

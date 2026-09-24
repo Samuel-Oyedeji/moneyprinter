@@ -1,8 +1,8 @@
 """Animation studio: paper cut-out story videos, drawn entirely in code.
 
 Create  - one topic or a batch, a length, an aspect ratio and an ElevenLabs
-          voice; generation runs in the background (storyboard → voice-over
-          → Remotion render → YouTube metadata).
+          voice; generation runs in the background (script → scenes →
+          voice-over → Remotion render → YouTube metadata).
 Library - finished videos: preview, edit the YouTube copy, schedule, upload,
           or mark as already posted.
 Schedule- single and batch YouTube scheduling on the animation calendar,
@@ -30,6 +30,8 @@ from app.services import upload_budget  # noqa: E402
 from app.services import schedule as shorts_schedule  # noqa: E402
 from app.services import voice as voice_service  # noqa: E402
 from app.services.animation import jobs, pipeline, render, store  # noqa: E402
+from app.services.animation import llm as anim_llm  # noqa: E402
+from app.services.animation import script as script_service  # noqa: E402
 from app.services.animation import schedule as anim_schedule  # noqa: E402
 from app.services.animation import metadata as metadata_service  # noqa: E402
 from app.services.animation import storyboard as storyboard_service  # noqa: E402
@@ -59,11 +61,12 @@ st.caption(
     "character, prop and scene is drawn in code by Remotion. No generated images."
 )
 
-LENGTHS = [15, 20, 30, 45, 60, 90, 120]
+LENGTHS = [15, 20, 30, 45, 55, 60, 90, 120]
 ASPECT_LABELS = {"9:16": "Vertical 9:16 · Shorts", "16:9": "Landscape 16:9 · YouTube"}
 STATUS_LABELS = {
     store.STATUS_QUEUED: "🕐 Queued",
-    store.STATUS_WRITING: "✍️ Writing storyboard",
+    store.STATUS_SCRIPTING: "📝 Writing the script",
+    store.STATUS_WRITING: "🎬 Directing the scenes",
     store.STATUS_VOICING: "🎙 Recording narration",
     store.STATUS_RENDERING: "🎞 Rendering",
     store.STATUS_PACKAGING: "🏷 Writing YouTube copy",
@@ -78,6 +81,18 @@ ENTRY_CHIPS = {
     anim_schedule.STATUS_UPLOADED: "📥 uploaded (private draft)",
     anim_schedule.STATUS_POSTED: "✅ posted by hand",
     anim_schedule.STATUS_FAILED: "❌ failed",
+}
+MODEL_ROLES = {
+    "script": (
+        "Script writer",
+        "Writes the narration in your style from the topic, description and length, "
+        "using its own system prompt.",
+    ),
+    "writer": (
+        "Animation writer",
+        "Splits the script into scenes and directs them: backdrops, faces and "
+        "emotions, gestures, props. Also writes the YouTube title and description.",
+    ),
 }
 EDGE_VOICES = ["en-GB-RyanNeural", "en-GB-SoniaNeural", "en-US-AndrewNeural", "en-US-AvaNeural", "en-NG-AbeoNeural", "en-NG-EzinneNeural"]
 
@@ -133,6 +148,102 @@ with st.expander("🎙 Voice (ElevenLabs)", expanded=not voice_service.get_eleve
     st.caption(
         "ElevenLabs returns word-level timings, which drive the captions and when "
         "each character moves. Edge voices are free, for drafts."
+    )
+
+# ------------------------------------------------------------ model settings
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _openrouter_catalogue() -> list[dict]:
+    return anim_llm.openrouter_models(timeout=8)
+
+
+def _catalogue() -> tuple[list[dict], str]:
+    """OpenRouter's models, fetched once per session (a failure isn't retried
+    on every rerun; the Refresh button tries again)."""
+    if "anim_or_models" not in st.session_state:
+        try:
+            st.session_state["anim_or_models"], st.session_state["anim_or_error"] = _openrouter_catalogue(), ""
+        except Exception as exc:
+            st.session_state["anim_or_models"], st.session_state["anim_or_error"] = [], str(exc)
+    return st.session_state["anim_or_models"], st.session_state["anim_or_error"]
+
+
+def _price(value) -> str:
+    return "?" if value is None else "free" if value == 0 else f"${value:g}"
+
+
+def _model_label(model_id: str, by_id: dict) -> str:
+    m = by_id.get(model_id)
+    if not m:
+        return f"{model_id} · custom ID"
+    return f"{model_id} · {_price(m['prompt'])} in / {_price(m['completion'])} out per 1M tokens"
+
+
+def _save_model(role: str, model_id: str):
+    if role == "writer" and not str(config.animation.get("script_model", "") or "").strip():
+        # an unset script model follows the writer's; pin it so it stays put
+        config.animation["script_model"] = anim_llm.model_for("script")
+    config.animation[f"{role}_model"] = model_id
+    config.save_config()
+    st.session_state["anim_model_saved"] = f"{MODEL_ROLES[role][0]} model saved: {model_id}"
+
+
+def _save_typed_model(role: str):
+    typed = st.session_state.get(f"anim_model_typed_{role}", "").strip()
+    if typed:
+        _save_model(role, typed)
+    st.session_state[f"anim_model_typed_{role}"] = ""
+
+
+_or_key_name = "openrouter_api_key"
+with st.expander("🤖 Models (OpenRouter)", expanded=not str(config.app.get(_or_key_name, "") or "").strip()):
+    key_col, refresh_col = st.columns([3, 1], vertical_alignment="bottom")
+    or_key = key_col.text_input(
+        "OpenRouter API key",
+        value=str(config.app.get(_or_key_name, "") or ""),
+        type="password",
+        help="Shared with the rest of the app ([app] openrouter_api_key in config.toml).",
+    )
+    if or_key != str(config.app.get(_or_key_name, "") or ""):
+        config.app[_or_key_name] = or_key
+        config.save_config()
+    if refresh_col.button("Refresh model list"):
+        _openrouter_catalogue.clear()
+        st.session_state.pop("anim_or_models", None)
+    catalogue, catalogue_error = _catalogue()
+    if catalogue_error:
+        st.warning(f"Couldn't load OpenRouter's model list ({catalogue_error[:150]}). You can still type a model ID.")
+    by_id = {m["id"]: m for m in catalogue}
+    for role, (label, help_text) in MODEL_ROLES.items():
+        current = anim_llm.model_for(role)
+        options = list(by_id) if current in by_id else [current] + list(by_id)
+        pick_col, type_col = st.columns([3, 2])
+        chosen = pick_col.selectbox(
+            label,
+            options,
+            index=options.index(current),
+            format_func=lambda i: _model_label(i, by_id),
+            help=help_text,
+            key=f"anim_model_{role}::{current}",  # a fresh widget whenever the saved model changes
+        )
+        if chosen != current:
+            _save_model(role, chosen)
+        type_col.text_input(
+            "…or type a model ID",
+            key=f"anim_model_typed_{role}",
+            placeholder="e.g. moonshotai/kimi-k3",
+            help="Any OpenRouter model ID; press Enter to use it.",
+            on_change=_save_typed_model,
+            args=(role,),
+        )
+        if by_id and current not in by_id:
+            st.caption(f"⚠️ `{current}` isn't in OpenRouter's list; check the ID before generating.")
+    if st.session_state.get("anim_model_saved"):
+        st.success(st.session_state.pop("anim_model_saved"))
+    if anim_llm.provider_id() != "openrouter":
+        st.caption(f"⚠️ Calls go to `{anim_llm.provider_id()}` ([animation] llm_provider), not OpenRouter.")
+    st.caption(
+        "The script writer's system prompt is `app/services/animation/prompts/script_system.md`; "
+        "it gets the topic, description and length. New settings apply to the next video that starts."
     )
 
 section = st.segmented_control(
@@ -311,6 +422,19 @@ def _metadata_editor(p: dict):
             st.rerun()
 
 
+def _script_viewer(p: dict):
+    pid = p["project_id"]
+    written = store.read_json(store.path(pid, "script.json")) or {}
+    text = written.get("text") or storyboard_service.narration_text(store.read_json(store.path(pid, "storyboard.json")) or {})
+    if not text:
+        return
+    models = p.get("models") or {}
+    with st.expander("📝 Script", expanded=False):
+        st.write(text)
+        used = " · ".join(f"{MODEL_ROLES[r][0]}: `{models[r]}`" for r in MODEL_ROLES if models.get(r))
+        st.caption(f"{script_service.word_count(text)} words" + (f" · {used}" if used else ""))
+
+
 def _library_card(p: dict):
     pid = p["project_id"]
     meta = p.get("youtube") or {}
@@ -330,6 +454,7 @@ def _library_card(p: dict):
             posted = p.get("posted") or {}
             if posted.get("url"):
                 st.markdown(f"🔗 [{posted['url']}]({posted['url']})")
+            _script_viewer(p)
             _metadata_editor(p)
 
             if _schedulable(p):
@@ -369,11 +494,12 @@ def _library_card(p: dict):
             with action_cols[2].popover("⋯ More"):
                 redo = st.selectbox(
                     "Redo from",
-                    ["render", "voice", "storyboard", "package"],
+                    ["render", "voice", "storyboard", "script", "package"],
                     format_func={
                         "render": "Render again",
                         "voice": "New voice-over + render",
-                        "storyboard": "New storyboard (everything)",
+                        "storyboard": "New scenes for the same script",
+                        "script": "New script (everything)",
                         "package": "Rewrite YouTube copy only",
                     }.get,
                     key=f"redo_{pid}",

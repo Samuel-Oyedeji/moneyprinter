@@ -556,9 +556,17 @@ image_split_seconds = 18
 [animation]
 # Paper cut-out animated videos (Animation page). Everything on screen is
 # drawn in code by the Remotion project in remotion/ — no generated images.
-# The storyboard writer's LLM; empty values fall back to [documentary].
+# Two models, both set on the Animation page's "Models" panel (OpenRouter IDs):
+#   script_model  writes the narration script in the house style; its system
+#                 prompt is app/services/animation/prompts/script_system.md
+#   writer_model  splits the script into scenes and directs them (staging,
+#                 faces, emotions); also writes the YouTube copy
+# Empty script_model = writer_model; empty writer_model = llm_model_name, then
+# [documentary] llm_model_name. llm_provider empty = [documentary]'s, else openrouter.
 llm_provider = ""
 llm_model_name = ""
+script_model = ""
+writer_model = ""
 # Narration voice: "elevenlabs:<voice_id>:<name>" (word timings drive the
 # captions and the action cues). Edge voices ("en-GB-RyanNeural") also work.
 voice_name = ""

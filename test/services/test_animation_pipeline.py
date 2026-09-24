@@ -1,4 +1,4 @@
-"""End to end: storyboard → voice-over → real Remotion render → YouTube copy.
+"""End to end: script → storyboard → voice-over → real Remotion render → YouTube copy.
 
 The LLM and the voice are mocked (no network, no cost); the render is real,
 at quarter scale, so this needs Node and remotion/node_modules and takes
@@ -42,17 +42,26 @@ STORYBOARD = {
         },
     ],
 }
+SCRIPT = "Every night, the old keeper climbed his tower. Ships came home safely."
 METADATA = {"title": "The Keeper Who Never Slept", "description": "Line one.\n\nMore.", "hashtags": ["#Lighthouse"], "tags": ["lighthouse"]}
 
 
 LLM_PROMPTS: list[str] = []
+SCRIPT_CALLS: list[list[dict]] = []
 
 
-def fake_llm(prompt, on_cost=None):
+def fake_llm(prompt, on_cost=None, role="writer"):
     LLM_PROMPTS.append(prompt)
     if on_cost:
         on_cost(0.01)
     return METADATA if "SEO copywriter" in prompt else json.loads(json.dumps(STORYBOARD))
+
+
+def fake_script_model(messages, role="writer", on_cost=None):
+    SCRIPT_CALLS.append(messages)
+    if on_cost:
+        on_cost(0.01)
+    return f"TITLE: The Keeper's Light\n\nSCRIPT:\n{SCRIPT}"
 
 
 def fake_voice(text, voice, out_path):
@@ -78,9 +87,11 @@ class TestAnimationPipeline(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         LLM_PROMPTS.clear()
+        SCRIPT_CALLS.clear()
         for target, attr, value in (
             (store, "animation_dir", lambda: self._tmp.name),
             (llm, "generate_json", fake_llm),
+            (llm, "chat", fake_script_model),
             (tts, "synthesize", fake_voice),
         ):
             patcher = patch.object(target, attr, value)
@@ -110,12 +121,25 @@ class TestAnimationPipeline(unittest.TestCase):
         meta = done["youtube"]
         self.assertEqual(meta["title"], "The Keeper Who Never Slept")
         self.assertEqual(meta["hashtags"][:2], ["#Shorts", "#Lighthouse"])
-        # The fixture's 12 words are too few for 15 seconds, so the writer sends
-        # one corrective retry naming the problem before accepting it.
+        # The script model got its own system prompt and the topic, length and
+        # notes; its 12 words are too few for 15 seconds, so it was asked twice
+        # to rewrite, then kept (the rewrites were no closer).
+        self.assertEqual(len(SCRIPT_CALLS), 3)
+        system, request = SCRIPT_CALLS[0]
+        self.assertEqual(system["role"], "system")
+        self.assertIn("Shorts Scriptwriter", system["content"])
+        self.assertEqual(request["content"], "TOPIC: The lighthouse keeper\nDURATION: 15 seconds (38 to 45 words)\nNOTES: a moral about duty")
+        self.assertIn("must be", SCRIPT_CALLS[1][-1]["content"])
+        written = store.read_json(store.path(pid, "script.json"))
+        self.assertEqual((written["title"], written["text"]), ("The Keeper's Light", SCRIPT))
+        self.assertEqual(story["title"], "The Keeper's Light")  # the script's title is the working title
+        # The writer staged that exact script in one pass
         storyboard_prompts = [p for p in LLM_PROMPTS if "SEO copywriter" not in p]
-        self.assertEqual(len(storyboard_prompts), 2)
-        self.assertIn("it must be", storyboard_prompts[1])
-        self.assertAlmostEqual(store.total_cost(done), 0.034, places=3)  # 3 LLM calls + the voice
+        self.assertEqual(len(storyboard_prompts), 1)
+        self.assertIn(SCRIPT, storyboard_prompts[0])
+        self.assertEqual(store.read_json(store.path(pid, "words.json"))["chars"], len(SCRIPT))
+        self.assertEqual(set(done["models"]), {"script", "writer"})
+        self.assertAlmostEqual(store.total_cost(done), 0.054, places=3)  # 5 LLM calls + the voice
         self.assertIn("Rendering 100%", stages)
         self.assertEqual(stages[-1], "Done")
 

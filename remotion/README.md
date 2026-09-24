@@ -15,9 +15,11 @@ npm run render:demo   # out/demo.mp4
 ```
 
 The **Animation** page in the web UI drives this kit end to end
-(`app/services/animation/`): an LLM writes a storyboard in the vocabulary
-below, ElevenLabs records the narration with word timings, the compiler turns
-both into a story file, and `scripts/render.mjs` renders it:
+(`app/services/animation/`): a script model writes the narration in the house
+style (its system prompt is `app/services/animation/prompts/script_system.md`),
+a writer model splits that script into scenes and stages them in the
+vocabulary below, ElevenLabs records the narration with word timings, the
+compiler turns both into a story file, and `scripts/render.mjs` renders it:
 
 ```
 node scripts/render.mjs --props story.json --public-dir <job>/public --out final.mp4 [--scale 0.5]

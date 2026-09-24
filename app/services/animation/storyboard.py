@@ -1,12 +1,14 @@
-"""Storyboard writer: topic → narration by scene + staging in the kit's vocabulary.
+"""Animation writer: the finished script → scenes + staging in the kit's vocabulary.
 
-The LLM writes the words AND directs the scene (who stands where, what they
-hold, which gesture lands on which spoken word), but only by choosing named
-options. Positions are slots ("left", "center"...), timing is a cue word
+The script comes from script.py (its own model and system prompt). This LLM
+(role "writer") splits it into scenes without changing a word and directs
+each one (who stands where, how they feel, what they hold, which gesture
+lands on which spoken word), but only by choosing named options. Positions are slots ("left", "center"...), timing is a cue word
 from the narration; the compiler turns both into coordinates and seconds
 once the voice-over exists, for whichever aspect ratio is being rendered.
 """
 
+import difflib
 import re
 
 from loguru import logger
@@ -29,32 +31,41 @@ def _opts(values) -> str:
     return " | ".join(values)
 
 
-def build_prompt(topic: str, context: str, seconds: int, aspect: str) -> str:
-    target, low, high = target_words(seconds)
-    min_scenes, max_scenes = scene_range(seconds)
+def script_seconds(script: str) -> int:
+    return max(5, round(len(script.split()) / WORDS_PER_SECOND))
+
+
+def build_prompt(topic: str, context: str, script: str, aspect: str) -> str:
+    min_scenes, max_scenes = scene_range(script_seconds(script))
     orientation = "vertical 9:16 (phone, Shorts)" if aspect == "9:16" else "landscape 16:9 (regular YouTube)"
     return f"""
 # Role
-You write and direct short animated explainer videos in a paper cut-out
-storybook style. Every picture is drawn by code from a fixed kit, so you may
-ONLY use the options listed below. You decide the words and the staging.
+You direct short animated videos in a paper cut-out storybook style. The
+script is already written; your job is to split it into scenes and stage
+each one: backdrops, who is on screen, how they feel, what they hold and do,
+and the props and notes that make each line visual. Every picture is drawn
+by code from a fixed kit, so you may ONLY use the options listed below.
 
 # The video
 Topic: {topic}
-Context / research from the producer (treat as the most reliable source):
+Context / research from the producer (use it to get people, places and
+objects right):
 {context.strip() or "(none)"}
-Length: about {seconds} seconds of narration → {low}–{high} words total (aim for {target}).
 Format: {orientation}.
-Scenes: {min_scenes}–{max_scenes}, each 1–2 sentences of narration.
 
-# Writing rules
-- It can be a moral story, a slice of history, or a fact explainer; pick what
-  fits the topic. The FIRST sentence must hook (a surprising fact, a question,
-  a vivid moment). End with a satisfying payoff or takeaway line.
-- Plain spoken English, past tense for stories. No lists, no "In this video".
-- Only state facts you are confident about; prefer the producer's context.
-  Do not invent precise statistics. Write numbers as digits (1928, 70%).
-- The narration is read aloud AND shown as captions.
+# The script (final: do not edit it)
+{script.strip()}
+
+# Splitting rules
+- Split the script into {min_scenes}-{max_scenes} scenes, in order. Each scene's
+  "narration" is a run of consecutive sentences copied EXACTLY from the script.
+- Every word of the script appears once, in order. Do not add, drop, reword
+  or re-punctuate anything; the narration is read aloud and shown as captions.
+- Blank lines in the script separate its beats (hook, set-up, the main run,
+  the turn, the ending). Cut on a beat, or inside a long beat where the
+  picture should change: a new place, time, person or idea.
+- If the last line trails off with "...", it loops back into the first line
+  when the video replays: keep it exactly as written, as the final scene.
 
 # Staging rules
 - Each scene: one backdrop, at most 3 people and 3 props. Vary backdrops.
@@ -65,6 +76,8 @@ Scenes: {min_scenes}–{max_scenes}, each 1–2 sentences of narration.
 - Every action and note is timed by a "cue": one word copied exactly from
   that scene's narration; it happens when that word is spoken.
 - Put people and props in different places so nothing overlaps.
+- Direct the emotion: give each person the face that fits the line, and use
+  "feel" actions when the mood turns (worried → surprised → smile).
 - Use notes sparingly: a "title" banner for the main subject, a "stamp" for
   a key date or number (text should be just the number, e.g. "1928" or
   "70%"), a "label" to name a person or object on screen (target = a cast id
@@ -144,11 +157,15 @@ Respond ONLY with JSON in this shape:
 """.strip()
 
 
-def _word_count(storyboard: dict) -> int:
-    return sum(len(str(s.get("narration", "")).split()) for s in storyboard.get("scenes", []))
+def _key(token: str) -> str:
+    return re.sub(r"[^\w%]", "", token.lower())
 
 
-def validate(storyboard, seconds: int) -> list[str]:
+def _scene_tokens(storyboard: dict) -> list[str]:
+    return [t for s in storyboard.get("scenes", []) if isinstance(s, dict) for t in str(s.get("narration", "")).split()]
+
+
+def validate(storyboard, script: str) -> list[str]:
     """Problems worth one corrective retry (the compiler fixes the rest)."""
     if not isinstance(storyboard, dict):
         return ["the reply was not a JSON object"]
@@ -156,11 +173,9 @@ def validate(storyboard, seconds: int) -> list[str]:
     scenes = storyboard.get("scenes")
     if not isinstance(scenes, list) or not scenes:
         return ["there are no scenes"]
-    _, low, high = target_words(seconds)
-    words = _word_count(storyboard)
-    if not low <= words <= high:
-        problems.append(f"the narration is {words} words; it must be {low}–{high} words for {seconds} seconds")
-    min_scenes, max_scenes = scene_range(seconds)
+    if [_key(t) for t in _scene_tokens(storyboard)] != [_key(t) for t in script.split()]:
+        problems.append("the scenes' narration must be the script word for word, in order, with nothing added or left out")
+    min_scenes, max_scenes = scene_range(script_seconds(script))
     if not min_scenes <= len(scenes) <= max_scenes:
         problems.append(f"there are {len(scenes)} scenes; use {min_scenes}–{max_scenes}")
     if any(not str(s.get("narration", "")).strip() for s in scenes if isinstance(s, dict)):
@@ -173,10 +188,50 @@ def validate(storyboard, seconds: int) -> list[str]:
     return problems
 
 
-def write_storyboard(topic: str, context: str, seconds: int, aspect: str, on_cost=None) -> dict:
-    prompt = build_prompt(topic, context, seconds, aspect)
-    storyboard = llm.generate_json(prompt, on_cost=on_cost)
-    problems = validate(storyboard, seconds)
+def _script_index(opcodes, p: int, script_len: int, board_len: int) -> int:
+    """Where position p of the writer's words falls in the script's words."""
+    if p >= board_len:
+        return script_len
+    for tag, i1, i2, j1, j2 in opcodes:
+        if tag == "insert" and i1 == p:
+            return j1  # script words the writer dropped go to the next scene
+        if i1 <= p < i2:
+            if tag == "equal":
+                return j1 + (p - i1)
+            return j1 + round((p - i1) * (j2 - j1) / (i2 - i1))
+    return script_len
+
+
+def align_to_script(storyboard: dict, script: str) -> dict:
+    """Make the scenes speak the script exactly, keeping the writer's scene cuts.
+
+    Any word the writer changed, dropped or added is corrected from the
+    script; scenes left with no words are dropped.
+    """
+    script_tokens = script.split()
+    scenes = [s for s in storyboard.get("scenes", []) if isinstance(s, dict)]
+    lengths = [len(str(s.get("narration", "")).split()) for s in scenes]
+    board_tokens = _scene_tokens(storyboard)
+    opcodes = difflib.SequenceMatcher(
+        a=[_key(t) for t in board_tokens], b=[_key(t) for t in script_tokens], autojunk=False
+    ).get_opcodes()
+    starts, pos = [], 0
+    for n in lengths:
+        starts.append(pos)
+        pos += n
+    cuts = [0] + [_script_index(opcodes, p, len(script_tokens), len(board_tokens)) for p in starts[1:]] + [len(script_tokens)]
+    kept = []
+    for i, scene in enumerate(scenes):
+        cuts[i + 1] = max(cuts[i + 1], cuts[i])  # cuts only move forward
+        if cuts[i + 1] > cuts[i]:
+            kept.append({**scene, "narration": " ".join(script_tokens[cuts[i] : cuts[i + 1]])})
+    return {**storyboard, "scenes": kept}
+
+
+def write_storyboard(topic: str, context: str, script: str, aspect: str, on_cost=None) -> dict:
+    prompt = build_prompt(topic, context, script, aspect)
+    storyboard = llm.generate_json(prompt, on_cost=on_cost, role="writer")
+    problems = validate(storyboard, script)
     if problems:
         logger.info(f"storyboard needs a fix: {problems}")
         retry = (
@@ -184,15 +239,15 @@ def write_storyboard(topic: str, context: str, seconds: int, aspect: str, on_cos
             + "\n\n# Your previous attempt had problems — fix them and return the full JSON again:\n- "
             + "\n- ".join(problems)
         )
-        second = llm.generate_json(retry, on_cost=on_cost)
-        second_problems = validate(second, seconds)
+        second = llm.generate_json(retry, on_cost=on_cost, role="writer")
+        second_problems = validate(second, script)
         if len(second_problems) <= len(problems):
             storyboard, problems = second, second_problems
     if not isinstance(storyboard, dict) or not storyboard.get("scenes"):
         raise RuntimeError("the storyboard writer returned no scenes")
-    for scene in storyboard["scenes"]:
-        scene["narration"] = re.sub(r"\s+", " ", str(scene.get("narration", ""))).strip()
-    storyboard["scenes"] = [s for s in storyboard["scenes"] if s["narration"]]
+    storyboard = align_to_script(storyboard, script)
+    if not storyboard["scenes"]:
+        raise RuntimeError("the animation writer returned no scenes")
     return storyboard
 
 

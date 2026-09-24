@@ -3,8 +3,11 @@
 Each project lives in storage/animation/<project_id>/:
 
     project.json     - topic, context, length, aspect, voice, status, progress,
-                       costs, YouTube metadata, manual "already posted" mark
-    storyboard.json  - the LLM's storyboard (narration + staging by scene)
+                       costs, models used, YouTube metadata, manual
+                       "already posted" mark
+    script.json      - the narration script (text, word count, model)
+    storyboard.json  - the writer's storyboard (the script split into scenes
+                       + staging)
     public/          - Remotion's public dir for this render (narration.mp3)
     words.json       - word timings from TTS (drive captions and action cues)
     story.json       - the compiled Remotion story (props for PaperStory)
@@ -23,6 +26,7 @@ import uuid
 from app.utils import utils
 
 STATUS_QUEUED = "queued"
+STATUS_SCRIPTING = "scripting"  # the narration script
 STATUS_WRITING = "writing"  # storyboard
 STATUS_VOICING = "voicing"  # TTS
 STATUS_RENDERING = "rendering"
@@ -30,7 +34,7 @@ STATUS_PACKAGING = "packaging"  # YouTube metadata
 STATUS_DONE = "done"
 STATUS_FAILED = "failed"
 
-RUNNING_STATUSES = (STATUS_WRITING, STATUS_VOICING, STATUS_RENDERING, STATUS_PACKAGING)
+RUNNING_STATUSES = (STATUS_SCRIPTING, STATUS_WRITING, STATUS_VOICING, STATUS_RENDERING, STATUS_PACKAGING)
 ASPECTS = ("9:16", "16:9")
 
 _write_lock = threading.RLock()
