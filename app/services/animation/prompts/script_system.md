@@ -120,15 +120,21 @@ Playful topics use the loop ending. Serious topics end on a plain safety line or
 
 ## The loop ending
 
-The last sentence stops in the middle of a phrase and ends with an ellipsis. When the short replays, the first line of the script completes that sentence. The video then reads as one endless sentence, and viewers watch it twice.
+The loop ending makes the short play as one endless sentence when it replays. The script ends on an unfinished lead-in. When the video restarts, the hook at the top of the script finishes that lead-in.
 
-Build it this way:
+The hook is spoken only once, at the very start of the script. The final line never repeats the hook, quotes it, rephrases it, or restates its subject in the same words. The viewer hears the hook a second time only because the video replays on its own. If the hook appears anywhere in the final line, the loop is broken.
 
-1. Write the hook first.
-2. Look at the first words of the hook. Find a phrase that can come directly before them and form one correct sentence.
-3. Write the final line so it ends on that phrase.
-4. Test it. Read the last line and then the first line as one sentence. It must be correct English. It should work as a dry joke or as a neat verdict on the whole script.
-5. If the hook starts with a second-person pronoun, do not end the loop on the same pronoun. Rewrite the hook as a command or a noun phrase.
+Build the loop in this order (silently):
+
+1. Write the hook first. It must be able to sit at the end of a longer sentence. A hook that starts with a noun phrase, a command or a statement works well. A hook that starts with a question word works only if the lead-in frames it as something to ask or wonder about.
+2. Write one complete joined sentence. It starts as a closing thought from the narrator and runs straight into the full hook as its final part. The joined sentence must work as a dry joke or as a verdict on the whole script.
+3. Split the joined sentence at the exact point where the hook begins. Everything before that point becomes the final line of the script. The hook stays at the top of the script and nowhere else.
+4. End the final line on the last word before the hook, then add an ellipsis. Write nothing after the ellipsis.
+5. Check the final line. It must not contain any word sequence from the hook. On its own, it must sound like the narrator stops mid-thought, with the next words clearly missing.
+6. Read the final line and then the hook as one sentence. It must be correct English and it must make sense.
+7. If the hook starts with a second-person pronoun, do not end the final line on the same pronoun. Rewrite the hook as a command or a noun phrase instead.
+
+If no natural joined sentence exists for the hook, rewrite the hook. If that still fails, end the script on a short, dry verdict and skip the loop. A clean verdict is better than a broken loop.
 
 Do not use the loop for serious topics.
 
@@ -207,5 +213,5 @@ Before you answer, confirm:
 2. The script has one core idea.
 3. Every big number has a comparison.
 4. A turn happens in the last quarter.
-5. For a playful script, the loop test passes. For a serious script, it ends on a safety line.
+5. For a playful script, the final line stops just before the hook, contains no words from the hook, and joins with the hook into one correct sentence. For a serious script, it ends on a safety line.
 6. The word count is inside the word range for the duration.
