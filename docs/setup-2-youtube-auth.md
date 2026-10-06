@@ -85,7 +85,8 @@ The Schedule page in the WebUI will also stop showing the
 
 ---
 
-**Done.** Continue with [setup-3-discord.md](setup-3-discord.md).
+**Done.** Continue with [setup-3-discord.md](setup-3-discord.md). For the
+Analytics page, see [setup-5-youtube-analytics.md](setup-5-youtube-analytics.md).
 
 ## What to know
 

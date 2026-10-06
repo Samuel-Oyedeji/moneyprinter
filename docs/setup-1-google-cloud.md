@@ -35,7 +35,8 @@ that owns your YouTube channel**.
 5. You'll land on the API's overview page — that means it's enabled.
 6. Back in **Library**, search `YouTube Analytics API`, open it and click
    **ENABLE** too. It powers the Analytics page (watch time, % viewed,
-   subscribers gained per video); uploads work without it.
+   subscribers gained per video); uploads work without it. Full analytics
+   setup: [setup-5-youtube-analytics.md](setup-5-youtube-analytics.md).
 
 ## 3. Configure the OAuth consent screen
 

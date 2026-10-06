@@ -16,6 +16,7 @@ review and publish.
 > 2. [YouTube authorization](setup-2-youtube-auth.md)
 > 3. [Discord alerts](setup-3-discord.md)
 > 4. [VPS deployment](setup-4-vps-deploy.md)
+> 5. [YouTube Analytics](setup-5-youtube-analytics.md) (for the Analytics page)
 
 ## How it works
 

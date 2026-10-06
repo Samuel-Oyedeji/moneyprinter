@@ -120,7 +120,7 @@ if not ready:
             "2. On your computer run `.venv/bin/python youtube_auth.py` again and tick every permission: "
             "it now also asks to *view* your channel and its analytics.\n"
             "3. On a VPS, copy the new `storage/youtube/token.json` to the server.\n\n"
-            "Uploads keep working the whole time. Full guide: `docs/analytics.md`."
+            "Uploads keep working the whole time. Full guide: `docs/setup-5-youtube-analytics.md`."
         )
 
 df_all, items, videos, result = _load()

@@ -13,6 +13,9 @@ back from YouTube and shows what works across the three studios: Shorts
 
 ## Turning it on (one time)
 
+Step-by-step guide:
+[setup-5-youtube-analytics.md](setup-5-youtube-analytics.md). In short:
+
 1. Google Cloud Console → **APIs & Services → Library** → enable
    **YouTube Analytics API** (the Data API is already on for uploads).
 2. Run `.venv/bin/python youtube_auth.py` again and tick every permission.
