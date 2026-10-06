@@ -236,7 +236,7 @@ def run_schedules(request: Request, body: ScheduleRunRequest = None):
 
 
 def _run_all_calendars(run_date=None) -> None:
-    """Sync the channel, then run all three calendars side by side.
+    """Sync the channel, clean up storage, then run all three calendars.
 
     The sync goes first so a video the owner already posted by hand is
     marked posted before its calendar entry could upload it again. It is
@@ -250,6 +250,15 @@ def _run_all_calendars(run_date=None) -> None:
         analytics_sync.run_before_uploads()
     except Exception:
         logger.exception("analytics sync before uploads failed; running uploads anyway")
+
+    # Storage clean-up after the sync (so hand-posted videos count as
+    # posted) and before the calendars start new renders.
+    from app.services import sweeper
+
+    try:
+        sweeper.run_scheduled()
+    except Exception:
+        logger.exception("storage clean-up failed; running uploads anyway")
 
     # Documentaries and animations live on their own calendars but share
     # this cron hook; each runner has its own lock, so double triggers are

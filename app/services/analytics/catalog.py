@@ -219,7 +219,7 @@ def animation_items() -> list[dict]:
 
 # --------------------------------------------------------------- documentaries
 def documentary_items() -> list[dict]:
-    from app.services.documentary import doc_schedule, store, thumbnail
+    from app.services.documentary import doc_schedule, store
 
     entries_by_project: dict[str, list[dict]] = {}
     for entry in doc_schedule.list_entries():
@@ -238,10 +238,8 @@ def documentary_items() -> list[dict]:
         words = int(script.get("word_count") or 0)
         minutes = float(project.get("target_minutes") or 0) or words / 150
         auto = any(e.get("mode") == "auto" for e in entries)
-        try:
-            has_thumb = os.path.isfile(thumbnail.thumbnail_path(pid))
-        except Exception:
-            has_thumb = False
+        # (thumbnail.thumbnail_path() would create the render folder)
+        has_thumb = os.path.isfile(os.path.join(utils.task_dir(), pid, "thumbnail.jpg"))
         features = {
             "Planned length": length_bucket(minutes * 60) if minutes else "Unknown",
             "Made from": "Calendar autopilot" if auto else "Studio (reviewed)",

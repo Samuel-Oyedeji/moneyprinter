@@ -4,6 +4,7 @@ Scans storage/tasks/*/final-*.mp4 directly from disk, so it shows videos
 from any source - WebUI runs, API/cron runs, scheduled generations - and
 survives container restarts (unlike the in-memory task list).
 """
+import csv
 import json
 import os
 import sys
@@ -18,7 +19,9 @@ if root_dir in sys.path:
     sys.path.remove(root_dir)
 sys.path.insert(0, root_dir)
 
+from app.config import config
 from app.services import schedule as schedule_service
+from app.services import sweeper
 from app.services.analytics import store as analytics_store
 from app.services.youtube_upload import youtube_upload_service
 from app.utils import utils
@@ -206,6 +209,83 @@ def _scan_library() -> list[dict]:
     return videos
 
 
+def _mb(size: int) -> str:
+    return f"{size / (1024 * 1024):,.0f} MB"
+
+
+def _cleanup_panel() -> None:
+    """Settings, preview and manual run for the daily storage clean-up."""
+    opts = sweeper.settings()
+    status = "on" if opts["enabled"] else "off"
+    with st.expander(f"🧹 Automatic clean-up ({status})"):
+        st.caption(
+            "Runs with the daily cron, right after the analytics sync. It deletes the heavy files of "
+            "finished videos and keeps their details, so Analytics still knows every video. Anything "
+            "booked or retrying on a calendar, unfinished projects and anything changed in the last "
+            "day are never touched."
+        )
+        with st.form("sweeper_settings"):
+            enabled = st.toggle("Clean up automatically every day", value=opts["enabled"])
+            c1, c2, c3 = st.columns(3)
+            posted_days = c1.number_input("Posted videos: delete after (days)", 1, 365, opts["posted_days"], help="Counted from the day it went up on YouTube.")
+            unposted_days = c2.number_input("Never-posted videos: delete after (days)", 1, 365, opts["unposted_days"], help="Counted from the day it was made.")
+            cache_days = c3.number_input("Stock clip cache: delete after (days)", 1, 365, opts["cache_days"])
+            if st.form_submit_button("💾 Save"):
+                config.sweeper.update(enabled=enabled, posted_days=int(posted_days), unposted_days=int(unposted_days), cache_days=int(cache_days))
+                config.save_config()
+                st.rerun()
+
+        preview_col, run_col = st.columns(2)
+        if preview_col.button("🔍 Preview what would go", use_container_width=True):
+            with st.spinner("Checking every studio…"):
+                st.session_state["sweeper_preview"] = sweeper.plan()
+        with run_col.popover("🧹 Clean up now", use_container_width=True):
+            st.caption("Deletes everything the preview lists, now. This can't be undone.")
+            if st.button("Delete these files", type="primary", key="sweeper_run_now"):
+                with st.spinner("Cleaning up…"):
+                    result = sweeper.run()
+                st.session_state.pop("sweeper_preview", None)
+                st.session_state["sweeper_result"] = result
+                _scan_library.clear()
+                st.rerun()
+
+        result = st.session_state.pop("sweeper_result", None)
+        if result and result.get("skipped"):
+            st.warning(result["reason"])
+        elif result:
+            st.success(
+                f"Deleted {result['videos_swept']} video(s) ({_mb(result['video_bytes_freed'])}) and "
+                f"{result['cache_files_deleted']} cached clip(s) ({_mb(result['cache_bytes_freed'])})."
+                + (f" Couldn't delete: {', '.join(result['failed'])}." if result.get("failed") else "")
+            )
+
+        preview = st.session_state.get("sweeper_preview")
+        if preview:
+            st.markdown(
+                f"**{len(preview['videos'])} video(s), {_mb(preview['video_bytes'])}** would be deleted, plus "
+                f"**{preview['cache_files']} cached clip(s), {_mb(preview['cache_bytes'])}**."
+            )
+            if preview["videos"]:
+                st.dataframe(
+                    [{"Studio": v["studio"], "Video": v["label"], "Why": v["reason"], "Size": _mb(v["bytes"])} for v in preview["videos"]],
+                    hide_index=True,
+                    use_container_width=True,
+                )
+
+        log_path = os.path.join(utils.storage_dir("sweeper"), "log.csv")
+        if os.path.isfile(log_path):
+            with open(log_path, "r", encoding="utf-8-sig") as f:
+                rows = list(csv.DictReader(f))
+            if rows:
+                st.caption(f"Recently deleted (full log: `{log_path}`)")
+                st.dataframe(
+                    [{"When": r["swept_at"], "Studio": r["studio"], "Video": r["label"], "Why": r["reason"], "Size": _mb(int(r["bytes"] or 0))} for r in reversed(rows[-20:])],
+                    hide_index=True,
+                    use_container_width=True,
+                )
+
+
+_cleanup_panel()
 videos = _scan_library()
 
 if not videos:

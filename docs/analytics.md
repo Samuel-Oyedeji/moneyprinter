@@ -67,25 +67,22 @@ was set up don't have it, and show a blank instead of a guess.
 
 ## When files are swept from disk
 
-Rendered videos and their folders (`storage/tasks/…`, project folders)
-can be deleted by a clean-up job to save space. Analytics doesn't need
-them. Every time it looks at the studios (each sync, each cron run even
-without YouTube access, each Analytics page load), it records what it sees
-in `items.csv`: the titles the app gave the video, its topic, batch and
+The built-in daily clean-up ([storage-cleanup.md](storage-cleanup.md))
+deletes rendered videos once they're posted or too old. Analytics doesn't
+need them. Every time it looks at the studios (each sync, each cron run
+even without YouTube access, each Analytics page load, and the clean-up
+itself before it deletes anything), it records what it sees in
+`items.csv`: the titles the app gave the video, its topic, batch and
 style. A swept video therefore:
 
-- still gets matched when you post it by hand days later, by the title
-  stored in `items.csv`;
+- still gets matched when you post it by hand later, by the title stored
+  in `items.csv`;
 - keeps its topic, category, batch and style in every chart;
 - gets its "posted" mark in `posted_marks.csv` once its project folder is
   gone.
 
-Two rules for your clean-up job:
-
-1. **Never delete `storage/analytics/`** (and keep it in your backups).
-   It's the only copy of the history.
-2. Let the cron run (or a page load) see a video at least once before it's
-   swept. With a daily cron and a 7-day sweep that's automatic.
+The clean-up never touches `storage/analytics/`. Keep that folder in your
+backups: it's the only copy of the history.
 
 ## Reconciling videos you post by hand
 

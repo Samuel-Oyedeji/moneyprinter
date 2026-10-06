@@ -511,6 +511,23 @@ contains_synthetic_media = false
 # so the calendar never uploads a second copy, and the stats get refreshed.
 analytics_sync_before_uploads = true
 
+[sweeper]
+# Daily storage clean-up, run by the cron hook (POST /api/v1/schedules/run)
+# right after the analytics sync. It deletes the heavy files of finished
+# videos (the mp4s, narration, images, render folders) and keeps their
+# details, so the Analytics page still knows every video.
+#   - posted videos: deleted posted_days after they went up on YouTube
+#     (uploaded by the app, marked "Already posted", or matched by title)
+#   - never-posted videos: deleted unposted_days after they were made
+#   - downloaded stock clips (storage/cache_videos): after cache_days
+# Never touched: anything booked or retrying on a calendar, documentaries
+# and animations still in progress, anything modified in the last day,
+# and storage/analytics. Preview it first: Video Library → Clean-up.
+enabled = true
+posted_days = 7
+unposted_days = 30
+cache_days = 7
+
 [discord]
 # Discord webhook for "video ready to publish" alerts.
 # Channel settings > Integrations > Webhooks > New Webhook > Copy URL

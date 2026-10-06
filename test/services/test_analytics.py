@@ -631,18 +631,22 @@ class TestSync(StorageTestCase):
     def test_cron_hook_syncs_before_running_calendars(self):
         from app.controllers.v1 import schedule as schedule_controller
 
+        from app.services import sweeper
+
         calls = []
         with patch.object(sync, "run_before_uploads", side_effect=lambda: calls.append("sync")), patch.object(
+            sweeper, "run_scheduled", side_effect=lambda: calls.append("sweep")
+        ), patch.object(
             shorts_schedule, "run_due_entries", side_effect=lambda run_date=None: calls.append("shorts")
         ), patch.object(doc_schedule, "run_due_entries", side_effect=lambda run_date=None: calls.append("docs")), patch.object(
             anim_schedule, "run_due_entries", side_effect=lambda run_date=None: calls.append("anims")
         ):
             schedule_controller._run_all_calendars()
             deadline = time.time() + 5
-            while len(calls) < 4 and time.time() < deadline:
+            while len(calls) < 5 and time.time() < deadline:
                 time.sleep(0.01)
-        self.assertEqual(calls[0], "sync")
-        self.assertEqual(sorted(calls[1:]), ["anims", "docs", "shorts"])
+        self.assertEqual(calls[:2], ["sync", "sweep"])
+        self.assertEqual(sorted(calls[2:]), ["anims", "docs", "shorts"])
 
 
 # ---------------------------------------------------------------------- report
