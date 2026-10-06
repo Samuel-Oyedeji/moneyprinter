@@ -1,5 +1,9 @@
 """Everything the three studios produced, as one list of comparable items.
 
+Items are read from the studios' own files and remembered in
+storage/analytics/items.csv, because rendered videos (and their task
+folders) get swept from disk while their YouTube copies live on.
+
 An item is one finished video the app made, whether or not it ever reached
 YouTube:
 
@@ -25,7 +29,7 @@ YouTube:
 import json
 import os
 from collections import Counter
-from datetime import datetime
+from datetime import date, datetime
 from glob import glob
 
 from loguru import logger
@@ -290,7 +294,6 @@ def shorts_items() -> list[dict]:
     """Shorts from the calendar (with their upload records) and the generator."""
     from app.services import schedule as shorts_schedule
 
-    posted_marks = analytics_store.load_links()["posted"]
     items: dict[str, dict] = {}
 
     # 1 · generator output on disk
@@ -373,20 +376,63 @@ def shorts_items() -> list[dict]:
         task_id = item.get("task_id")
         if not item["batch_id"] and task_id and finals_per_task[task_id] > 1:
             item["batch_id"] = f"variants-{task_id[:8]}"
-        if item["key"] in posted_marks:
-            item["posted"] = posted_marks[item["key"]]
     return list(items.values())
 
 
-def build_items() -> list[dict]:
-    """Every studio's items; a broken studio store never hides the others."""
-    items = []
+def merge_with_registry(live: list[dict], registry: dict, today: str) -> list[dict]:
+    """Today's studio scan on top of everything recorded before.
+
+    Rendered videos are swept from disk after a few days, taking their
+    script.json / storyboard.json with them. The registry keeps what they
+    were: their titles (so a video posted by hand later still reconciles),
+    features, batch and YouTube ids. What the studios report today wins
+    where they still know it.
+    """
+    merged = {key: {**old, "on_disk": False} for key, old in registry.items()}
+    for item in live:
+        old = registry.get(item["key"])
+        item["on_disk"] = True
+        item["last_seen"] = today
+        if old:
+            item["titles"] = _dedupe([*item["titles"], *old.get("titles", [])])
+            item["known_video_ids"] = _dedupe([*item["known_video_ids"], *old.get("known_video_ids", [])])
+            item["features"] = {**old.get("features", {}), **item["features"]}
+            item["topic"] = item["topic"] or old.get("topic", "")
+            item["created_at"] = old.get("created_at") or item["created_at"]
+            item["first_seen"] = old.get("first_seen") or today
+            # a recorded batch beats one guessed again from what is left on disk
+            if old.get("batch_id") and (not item["batch_id"] or item["batch_inferred"]):
+                item["batch_id"], item["batch_inferred"] = old["batch_id"], old.get("batch_inferred", False)
+        else:
+            item["first_seen"] = today
+        merged[item["key"]] = item
+    return list(merged.values())
+
+
+def build_items(persist: bool = True) -> list[dict]:
+    """Every video the app made, on disk or long since swept.
+
+    A broken studio store never hides the others. With ``persist`` the
+    result is written back to items.csv, which is what keeps swept videos.
+    """
+    live = []
     for name, builder in (("shorts", shorts_items), ("documentary", documentary_items), ("animation", animation_items)):
         try:
-            items.extend(builder())
+            live.extend(builder())
         except Exception:
             logger.exception(f"analytics: could not read the {name} studio")
+    items = merge_with_registry(live, analytics_store.load_registry(), date.today().isoformat())
+
+    marks = analytics_store.load_links()["posted"]
+    for item in items:
+        if item["key"] in marks and not (item.get("posted") or {}).get("manual"):
+            item["posted"] = marks[item["key"]]
     sizes = Counter((i["studio"], i["batch_id"]) for i in items if i["batch_id"])
     for item in items:
         item["batch_size"] = sizes.get((item["studio"], item["batch_id"]), 1) if item["batch_id"] else 1
+    if persist:
+        try:
+            analytics_store.save_registry(items)
+        except OSError:
+            logger.exception("analytics: could not save items.csv")
     return items

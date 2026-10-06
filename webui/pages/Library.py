@@ -151,7 +151,7 @@ def _posted_panel(video: dict, posted_marks: dict) -> None:
         link = f" · [link]({mark['url']})" if mark.get("url") else ""
         st.caption(f"✅ Posted by hand on {mark.get('date', '?')}{link}")
         if st.button("↩️ Unmark posted", key=f"lib_unpost_{key}", use_container_width=True):
-            analytics_store.unmark_short_posted(key)
+            analytics_store.unmark_posted(key)
             st.rerun()
         return
     with st.popover("✅ Already posted", use_container_width=True):
@@ -162,7 +162,7 @@ def _posted_panel(video: dict, posted_marks: dict) -> None:
         url = st.text_input("Video URL (optional)", key=f"lib_posted_url_{key}")
         posted_on = st.date_input("Posted on", value=date.today(), key=f"lib_posted_day_{key}")
         if st.button("Mark as posted", key=f"lib_posted_btn_{key}", type="primary"):
-            analytics_store.mark_short_posted(key, url=url, posted_on=posted_on.isoformat())
+            analytics_store.mark_posted(key, url=url, posted_on=posted_on.isoformat())
             st.rerun()
 
 

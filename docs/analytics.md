@@ -21,9 +21,10 @@ back from YouTube and shows what works across the three studios: Shorts
 3. VPS: copy the new `storage/youtube/token.json` to the server.
 4. Open **Analytics** and press **🔄 Sync now**.
 
-Syncing is cheap: listing the channel costs about 1 quota unit per 50
+Syncing is cheap. Listing the channel costs about 1 quota unit per 50
 videos out of the 10,000 daily units, so it never eats into your 6 uploads
-a day. Analytics API calls have their own quota.
+a day. Analytics API calls have their own quota, and they're incremental
+(see below).
 
 ## When it syncs
 
@@ -33,8 +34,58 @@ a day. Analytics API calls have their own quota.
 - `POST /api/v1/analytics/sync` or `.venv/bin/python -m app.services.analytics.sync`,
   for example from a second cron line in the evening.
 
-Each sync stores a daily view snapshot per video in
-`storage/analytics/history.json`.
+## What gets stored, and what gets fetched
+
+There's no database: everything is CSV in `storage/analytics/`, so you can
+open any of it in Excel or Google Sheets.
+
+| File | What | Grows by |
+|---|---|---|
+| `items.csv` | every video the app ever made: studio, topic, all titles it could be posted under, batch, YouTube IDs, posted mark, style features | one row per video made |
+| `channel_videos.csv` | your channel's videos with live views / likes / comments | replaced on each sync |
+| `analytics.csv` | Analytics API metrics (views, watch minutes, % viewed, likes, comments, shares, subscribers) per video per date range | see below |
+| `daily_stats.csv` | live counts once a day, for videos in their first 30 days | ≤ 30 rows per video, ever |
+| `matches.csv` | your Reconcile decisions (link / reject) | per decision |
+| `posted_marks.csv` | "already posted" marks for Shorts and for swept projects | per mark |
+| `topic_categories.csv` | topic → category | per topic |
+
+**Metrics are only fetched once.** The first sync backfills every video's
+history in a single request per 200 videos. After that, each sync asks
+only for the days since the last stored day. YouTube keeps revising the
+most recent couple of days, so only days at least 3 days old are fetched;
+a stored day never needs fetching again. Live view counts for the last 3
+days come from the Data API listing, which is real time.
+
+**It stays small.** Ranges older than 35 days are folded into one row per
+video, so `analytics.csv` holds about one row per video plus a month of
+recent detail. Lifetime totals don't change when that happens; % viewed is
+re-averaged weighted by views.
+
+**Views after 7 days** comes from `daily_stats.csv`. It's the fairest way
+to compare an old video with a new one. Videos published before analytics
+was set up don't have it, and show a blank instead of a guess.
+
+## When files are swept from disk
+
+Rendered videos and their folders (`storage/tasks/…`, project folders)
+can be deleted by a clean-up job to save space. Analytics doesn't need
+them. Every time it looks at the studios (each sync, each cron run even
+without YouTube access, each Analytics page load), it records what it sees
+in `items.csv`: the titles the app gave the video, its topic, batch and
+style. A swept video therefore:
+
+- still gets matched when you post it by hand days later, by the title
+  stored in `items.csv`;
+- keeps its topic, category, batch and style in every chart;
+- gets its "posted" mark in `posted_marks.csv` once its project folder is
+  gone.
+
+Two rules for your clean-up job:
+
+1. **Never delete `storage/analytics/`** (and keep it in your backups).
+   It's the only copy of the history.
+2. Let the cron run (or a page load) see a video at least once before it's
+   swept. With a daily cron and a 7-day sweep that's automatic.
 
 ## Reconciling videos you post by hand
 
@@ -107,17 +158,11 @@ The Reconcile tab also lists:
 It reuses existing categories so the set stays small. Correct any of them
 under *Videos → ✏️ Topic categories*.
 
-**Comparing fairly:** raw views favour older videos. Use *views per day* or
-*average % viewed* to compare, and keep "Hide videos younger than" at 2+
-days, because the Analytics API trails real time by about two days. View,
-like and comment counts come from the Data API in real time.
-
-## Files
-
-`storage/analytics/`: `channel.json` (last channel listing),
-`metrics.json` (Analytics API numbers), `history.json` (daily snapshots),
-`links.json` (your confirmations, rejections, Shorts posted marks, topic
-categories), `sync.json` (last sync status).
+**Comparing fairly:** raw views favour older videos. Use *views after 7
+days*, *views per day* or *average % viewed* to compare. Keep "Hide videos
+younger than" at 3+ days, because watch time and % viewed only arrive once
+YouTube has settled a day (about 3 days). View, like and comment counts
+come from the Data API in real time.
 
 ## API
 

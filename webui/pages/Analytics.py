@@ -58,7 +58,7 @@ def _load():
     items = catalog.build_items()
     videos = store.channel_videos()
     decisions = store.load_links()
-    df = report.build_dataset(items, videos, store.load_metrics(), decisions)
+    df = report.build_dataset(items, videos, decisions=decisions)
     result = reconcile.reconcile(items, videos, decisions)
     return df, items, videos, result
 
@@ -91,7 +91,7 @@ with status_col:
     elif last.get("error"):
         st.error(f"Last sync failed ({_ago(last.get('finished_at'))}): {last['error']}", icon="⚠️")
     else:
-        channel = store.load_channel().get("channel") or {}
+        channel = store.load_channel_info()
         bits = [f"Last synced {_ago(last.get('finished_at'))}"]
         if channel.get("title"):
             bits.insert(0, f"**{channel['title']}**")
@@ -140,8 +140,9 @@ studios = f2.multiselect(
     key="an_studios",
 )
 min_age = f3.number_input(
-    "Hide videos younger than (days)", 0, 30, 2, key="an_min_age",
-    help="Brand-new videos haven't had time to collect views; Analytics also trails by about two days.",
+    "Hide videos younger than (days)", 0, 30, 3, key="an_min_age",
+    help="Brand-new videos haven't had time to collect views, and watch time / % viewed only "
+    "arrive once YouTube has settled a day's numbers (about 3 days).",
 )
 
 df = df_all[df_all["live"] & df_all["studio"].isin(studios) & (df_all["age_days"] >= min_age)]
@@ -209,6 +210,7 @@ def _group_chart(summary: pd.DataFrame, dim: str, metric_col: str, title: str, c
 METRIC_TO_SUMMARY = {
     "views": "Median views",
     "views_per_day": "Median views/day",
+    "views_7d": "Median views at 7 days",
     "avg_view_pct": "Avg % viewed",
     "engagement_per_1k": "Engagement /1k",
     "subs_gained": "Subs gained",
@@ -417,6 +419,18 @@ with tabs[3]:
             },
         )
         st.download_button("⬇️ Download as CSV", table.to_csv(index=False).encode("utf-8"), "channel-analytics.csv", "text/csv")
+
+    with st.expander("📁 Data files (CSV)"):
+        st.caption(
+            f"Everything analytics stores lives in `{store.analytics_dir()}` as CSV. `items.csv` remembers "
+            "every video the app made, so videos swept from disk still count. Keep this folder out of "
+            "any clean-up job, and in your backups."
+        )
+        for name in ("items.csv", "channel_videos.csv", "analytics.csv", "daily_stats.csv", "matches.csv", "posted_marks.csv", "topic_categories.csv"):
+            path = os.path.join(store.analytics_dir(), name)
+            if os.path.isfile(path):
+                with open(path, "rb") as f:
+                    st.download_button(f"⬇️ {name}", f.read(), name, "text/csv", key=f"dl_{name}")
 
     with st.expander("✏️ Topic categories"):
         st.caption(

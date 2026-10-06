@@ -6,11 +6,12 @@ studio's style features. ``summarize`` / ``batch_summary`` / ``insights``
 are pure functions over that table.
 
 Raw view counts favour old videos, so the dashboard can hide very young
-ones and also compares on views per day and average % viewed, which do not
-grow with age.
+ones and also compares on views after 7 days (from the daily snapshots),
+views per day and average % viewed, which do not grow with age.
 """
 
-from datetime import datetime, timezone
+from datetime import date as date_cls
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
@@ -25,13 +26,15 @@ BASE_COLUMNS = (
     "batch_id", "batch_inferred", "batch_size", "generation", "posted_via", "match",
     "created_at", "published_at", "weekday", "publish_hour", "privacy", "live", "duration_seconds",
     "length", "age_days", "views", "likes", "comments", "shares", "watch_minutes",
-    "avg_view_seconds", "avg_view_pct", "subs_gained", "views_per_day", "engagement_per_1k",
+    "avg_view_seconds", "avg_view_pct", "subs_gained", "views_per_day", "views_7d", "engagement_per_1k",
+    "on_disk",
 )
 
 # What the dashboard can rank groups by: column → (label, aggregation).
 METRICS = {
     "views": ("Median views", "median"),
     "views_per_day": ("Median views per day", "median"),
+    "views_7d": ("Median views after 7 days", "median"),
     "avg_view_pct": ("Average % viewed", "mean"),
     "engagement_per_1k": ("Likes + comments + shares per 1k views", "mean"),
     "subs_gained": ("Subscribers gained per video", "mean"),
@@ -79,10 +82,12 @@ def build_dataset(
     metrics: dict | None = None,
     decisions: dict | None = None,
     now: datetime | None = None,
+    snapshots: dict | None = None,
 ) -> pd.DataFrame:
     items = catalog.build_items() if items is None else items
     videos = store.channel_videos() if videos is None else videos
-    metrics = store.load_metrics() if metrics is None else metrics
+    metrics = store.load_metric_totals() if metrics is None else metrics
+    snapshots = store.load_snapshots() if snapshots is None else snapshots
     decisions = store.load_links() if decisions is None else decisions
     now = now or datetime.now(timezone.utc)
     tz = _local_tz()
@@ -141,7 +146,9 @@ def build_dataset(
             "avg_view_pct": float(m["averageViewPercentage"]) if m.get("averageViewPercentage") is not None else float("nan"),
             "subs_gained": int(m.get("subscribersGained") or 0),
             "views_per_day": round(views / max(age_days, 1.0), 2),
+            "views_7d": views_after(snapshots.get(video_id) or [], local.date() if local else None, 7),
             "engagement_per_1k": round((likes + comments + shares) / views * 1000, 2) if views else 0.0,
+            "on_disk": bool(item.get("on_disk", True)) if item else False,
         }
         row.update(item.get("features") or {})
         rows.append(row)
@@ -149,6 +156,27 @@ def build_dataset(
     if frame.empty:
         return pd.DataFrame(columns=list(BASE_COLUMNS))
     return frame
+
+
+def views_after(snapshots: list[dict], published, days: int):
+    """Views ``days`` days after publishing, from the daily snapshots.
+
+    Uses the snapshot taken on that day, or the closest one within a day of
+    it; NaN when the video was not being tracked then (e.g. published
+    before analytics was set up), so it never pretends to know.
+    """
+    if not snapshots or published is None:
+        return float("nan")
+    target = published + timedelta(days=days)
+    best = None
+    for row in snapshots:
+        try:
+            gap = abs((date_cls.fromisoformat(row["date"]) - target).days)
+        except ValueError:
+            continue
+        if gap <= 1 and (best is None or gap < best[0]):
+            best = (gap, row["views"])
+    return float(best[1]) if best else float("nan")
 
 
 def feature_dimensions(df: pd.DataFrame, studio: str | None = None) -> list[str]:
@@ -164,7 +192,7 @@ def feature_dimensions(df: pd.DataFrame, studio: str | None = None) -> list[str]
 
 def summarize(df: pd.DataFrame, by: str) -> pd.DataFrame:
     """One row per group with the metrics the dashboard shows."""
-    columns = ["Videos", "Total views", "Median views", "Median views/day", "Avg % viewed", "Engagement /1k", "Subs gained", "Watch hours"]
+    columns = ["Videos", "Total views", "Median views", "Median views/day", "Median views at 7 days", "Avg % viewed", "Engagement /1k", "Subs gained", "Watch hours"]
     if df.empty or by not in df.columns:
         return pd.DataFrame(columns=[by, *columns])
     data = df[df[by].notna() & (df[by].astype(str) != "")]
@@ -175,6 +203,7 @@ def summarize(df: pd.DataFrame, by: str) -> pd.DataFrame:
             "Total views": grouped["views"].sum(),
             "Median views": grouped["views"].median().round(0),
             "Median views/day": grouped["views_per_day"].median().round(1),
+            "Median views at 7 days": grouped["views_7d"].median().round(0),
             "Avg % viewed": grouped["avg_view_pct"].mean().round(1),
             "Engagement /1k": grouped["engagement_per_1k"].mean().round(1),
             "Subs gained": grouped["subs_gained"].sum(),

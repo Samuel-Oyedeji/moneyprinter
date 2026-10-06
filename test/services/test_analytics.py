@@ -9,6 +9,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
+
 ROOT_DIR = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
@@ -361,22 +363,54 @@ class TestAnalyticsStore(StorageTestCase):
         links = analytics_store.load_links()
         self.assertEqual((links["links"], links["rejected"]), ({}, {"animation:b": ["vid00000001"]}))
         analytics_store.link("animation:b", "vid00000001")
-        self.assertEqual(analytics_store.load_links()["rejected"]["animation:b"], [])
+        self.assertEqual(analytics_store.load_links()["rejected"].get("animation:b", []), [])
         analytics_store.set_categories({"Moon": "Space", "Sun": "Space"})
         analytics_store.set_categories({"Sun": ""})
         self.assertEqual(analytics_store.load_links()["categories"], {"Moon": "Space"})
 
-    def test_short_posted_mark_round_trip(self):
-        analytics_store.mark_short_posted("shorts:t/final-1.mp4", url="https://youtu.be/vid00000001")
+    def test_posted_mark_round_trip(self):
+        analytics_store.mark_posted("shorts:t/final-1.mp4", url="https://youtu.be/vid00000001")
         self.assertTrue(analytics_store.load_links()["posted"]["shorts:t/final-1.mp4"]["manual"])
-        analytics_store.unmark_short_posted("shorts:t/final-1.mp4")
+        analytics_store.unmark_posted("shorts:t/final-1.mp4")
         self.assertEqual(analytics_store.load_links()["posted"], {})
 
-    def test_one_snapshot_per_video_per_day(self):
-        analytics_store.record_snapshots([video("vid00000001", "x", views=5)], "2026-10-01")
-        analytics_store.record_snapshots([video("vid00000001", "x", views=9)], "2026-10-01")
-        analytics_store.record_snapshots([video("vid00000001", "x", views=20)], "2026-10-02")
-        self.assertEqual([r["views"] for r in analytics_store.load_history()["vid00000001"]], [9, 20])
+    def test_everything_is_csv(self):
+        analytics_store.link("animation:a", "vid00000001")
+        analytics_store.set_categories({"Moon": "Space"})
+        analytics_store.save_channel({"id": "UC1"}, [video("vid00000001", "Moon, \"quoted\" 🌙", views=7)])
+        for name in ("matches.csv", "topic_categories.csv", "channel_videos.csv"):
+            self.assertTrue(os.path.isfile(os.path.join(analytics_store.analytics_dir(), name)), name)
+        [row] = analytics_store.channel_videos()
+        self.assertEqual((row["title"], row["views"]), ('Moon, "quoted" 🌙', 7))
+        self.assertEqual(analytics_store.load_channel_info(), {"id": "UC1"})
+
+    def test_snapshots_one_per_day_and_only_for_young_videos(self):
+        day = date(2026, 10, 1)
+        young = lambda views: video("vid00000001", "x", published=datetime(2026, 9, 28, tzinfo=timezone.utc).timestamp(), views=views)  # noqa: E731
+        old = video("vid0000000o", "old", published=datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp(), views=99)
+        self.assertEqual(analytics_store.record_snapshots([young(5), old], day.isoformat()), 1)
+        analytics_store.record_snapshots([young(9)], day.isoformat())
+        analytics_store.record_snapshots([young(20)], (day + timedelta(days=1)).isoformat())
+        history = analytics_store.load_snapshots()
+        self.assertEqual([r["views"] for r in history["vid00000001"]], [9, 20])
+        self.assertNotIn("vid0000000o", history)
+
+    def test_metric_periods_sum_and_compact_without_changing_totals(self):
+        analytics_store.add_metric_period("2026-01-01", "2026-08-01", {"v1": {"views": 100, "estimatedMinutesWatched": 50, "averageViewPercentage": 80}})
+        analytics_store.add_metric_period("2026-08-02", "2026-08-02", {"v1": {"views": 300, "estimatedMinutesWatched": 90, "averageViewPercentage": 40}})
+        analytics_store.add_metric_period("2026-10-01", "2026-10-01", {"v1": {"views": 100, "estimatedMinutesWatched": 10, "averageViewPercentage": 30}})
+        self.assertEqual(analytics_store.metrics_through(), "2026-10-01")
+        before = analytics_store.load_metric_totals()["v1"]
+        self.assertEqual(before["views"], 500)
+        self.assertAlmostEqual(before["averageViewPercentage"], (100 * 80 + 300 * 40 + 100 * 30) / 500)
+        self.assertAlmostEqual(before["averageViewDuration"], 150 * 60 / 500)
+        self.assertEqual(analytics_store.compact_metric_periods("2026-10-04"), 1)
+        rows = analytics_store.read_csv("analytics.csv")
+        self.assertEqual([(r["start_date"], r["end_date"]) for r in rows], [("2026-01-01", "2026-08-02"), ("2026-10-01", "2026-10-01")])
+        after = analytics_store.load_metric_totals()["v1"]
+        self.assertEqual(after["views"], 500)
+        self.assertAlmostEqual(after["averageViewPercentage"], before["averageViewPercentage"], places=2)
+        self.assertEqual(analytics_store.compact_metric_periods("2026-10-04"), 0)
 
     def test_categorize_only_new_topics_and_survive_bad_replies(self):
         analytics_store.set_categories({"Moon landing": "Space"})
@@ -479,21 +513,97 @@ class TestUploadTokenScopes(StorageTestCase):
             self.assertEqual(youtube_upload.youtube_upload_service.granted_scopes(), [youtube_upload.UPLOAD_SCOPE])
 
 
+# --------------------------------------------------------- swept-file survival
+class TestSweptVideosAreRemembered(StorageTestCase):
+    def test_items_survive_their_files_being_swept(self):
+        import shutil
+
+        pid = self.finished_animation("Fox", title="The Fox & the Grapes", board=BOARD, batch_id="b1")
+        self.finished_animation("Other in batch", batch_id="b1")
+        task_id, [path] = self.generator_short("Honey never spoils")
+        catalog.build_items()  # the daily sync / page load records them
+
+        shutil.rmtree(anim_store.project_dir(pid))
+        shutil.rmtree(os.path.dirname(path))
+        items = {i["key"]: i for i in catalog.build_items()}
+        fox = items[f"animation:{pid}"]
+        self.assertFalse(fox["on_disk"])
+        self.assertEqual(fox["titles"][0], "The Fox & the Grapes")
+        self.assertEqual((fox["batch_id"], fox["batch_size"]), ("b1", 2))
+        self.assertEqual(fox["features"]["Main setting"], "forest")
+        short = items[f"shorts:{task_id}/final-1.mp4"]
+        self.assertEqual((short["topic"], short["features"]["Footage source"]), ("Honey never spoils", "pexels"))
+
+        # a hand-posted swept video still reconciles; the mark has nowhere
+        # else to live, so it goes to posted_marks.csv
+        result = sync.reconcile_now([video("vid00000001", "The Fox & the Grapes")])
+        self.assertEqual(result["marked_posted"], [f"animation:{pid}"])
+        self.assertIn(f"animation:{pid}", analytics_store.load_links()["posted"])
+        reloaded = {i["key"]: i for i in catalog.build_items()}
+        self.assertTrue(reloaded[f"animation:{pid}"]["posted"]["manual"])
+
+    def test_live_data_wins_but_old_titles_ids_and_batches_are_kept(self):
+        live = [item("animation:a", ["New title"], known_video_ids=["vid2"], features={"Voice": "B"}, batch_id="inferred-x", batch_inferred=True)]
+        registry = {"animation:a": item("animation:a", ["Old title"], created_at=5.0, known_video_ids=["vid1"], features={"Voice": "A", "Main setting": "space"}, batch_id="b1", first_seen="2026-01-01")}
+        [merged] = catalog.merge_with_registry(live, registry, "2026-10-06")
+        self.assertEqual(merged["titles"], ["New title", "Old title"])
+        self.assertEqual(merged["known_video_ids"], ["vid2", "vid1"])
+        self.assertEqual(merged["features"], {"Voice": "B", "Main setting": "space"})
+        self.assertEqual((merged["batch_id"], merged["created_at"], merged["first_seen"], merged["last_seen"]), ("b1", 5.0, "2026-01-01", "2026-10-06"))
+
+    def test_registry_csv_round_trip(self):
+        items = [item("shorts:t/final-1.mp4", ["A, \"quoted\" title", "topic"], studio="shorts", known_video_ids=["v1", "v2"], posted={"manual": True, "url": "u", "date": "2026-10-01"}, features={"Voice": "Ava"})]
+        analytics_store.save_registry(items)
+        loaded = analytics_store.load_registry()["shorts:t/final-1.mp4"]
+        self.assertEqual(loaded["titles"], ['A, "quoted" title', "topic"])
+        self.assertEqual(loaded["known_video_ids"], ["v1", "v2"])
+        self.assertEqual(loaded["posted"], {"manual": True, "url": "u", "date": "2026-10-01"})
+        self.assertEqual(loaded["features"], {"Voice": "Ava"})
+
+    def test_cron_records_items_even_without_youtube_access(self):
+        self.finished_animation("Fox")
+        with patch.object(youtube_api, "readiness", return_value=(False, "no")):
+            sync.run_before_uploads()
+        self.assertEqual(len(analytics_store.load_registry()), 1)
+
+
 # ------------------------------------------------------------------------ sync
 class TestSync(StorageTestCase):
     def test_full_sync_stores_everything_and_reports(self):
-        self.finished_animation("Fox", title="The Fox", board=BOARD)
-        channel = {"channel": {"id": "UC1", "title": "Me"}, "videos": [video("vid00000001", "The Fox", views=500)]}
+        pid = self.finished_animation("Fox", title="The Fox", board=BOARD)
+        anim_store.update_project(pid, created_at=time.time() - 20 * 86400)
+        published = time.time() - 10 * 86400
+        channel = {"channel": {"id": "UC1", "title": "Me"}, "videos": [video("vid00000001", "The Fox", published=published, views=500)]}
         with patch.object(youtube_api, "list_channel_videos", return_value=channel), patch.object(
             youtube_api, "fetch_video_metrics", return_value={"vid00000001": {"views": 480, "averageViewPercentage": 71.0}}
         ) as metrics, patch.object(topics, "categorize", return_value={"Fox": "Moral Stories"}):
             status = sync.run()
         self.assertTrue(status["ok"], status)
-        self.assertEqual((status["videos"], status["linked"], status["marked_posted"], status["metrics"]), (1, 1, 1, 1))
-        self.assertEqual(metrics.call_args.kwargs["start_date"], date.today().isoformat())
+        self.assertEqual((status["videos"], status["linked"], status["marked_posted"], status["metrics_rows"]), (1, 1, 1, 1))
+        self.assertEqual(metrics.call_args.kwargs["start_date"], _iso(published)[:10])
+        self.assertEqual(metrics.call_args.kwargs["end_date"], (date.today() - timedelta(days=sync.SETTLE_DAYS)).isoformat())
         self.assertEqual(analytics_store.load_sync_status()["linked"], 1)
         self.assertEqual(analytics_store.channel_videos()[0]["video_id"], "vid00000001")
-        self.assertEqual(analytics_store.load_metrics()["vid00000001"]["averageViewPercentage"], 71.0)
+        self.assertEqual(analytics_store.load_metric_totals()["vid00000001"]["averageViewPercentage"], 71.0)
+
+    def test_metrics_are_fetched_only_for_days_not_stored_yet(self):
+        today = date(2026, 10, 10)
+        videos = [
+            video("vid00000001", "old", published=datetime(2026, 9, 1, tzinfo=timezone.utc).timestamp()),
+            video("vid00000002", "new", published=datetime(2026, 10, 9, tzinfo=timezone.utc).timestamp()),
+        ]
+        with patch.object(youtube_api, "fetch_video_metrics", return_value={"vid00000001": {"views": 10}}) as fetch:
+            first = sync.fetch_new_metrics(videos, today=today)
+            self.assertEqual(fetch.call_args.args[0], ["vid00000001"])  # published after the range: skipped
+            self.assertEqual((fetch.call_args.kwargs["start_date"], fetch.call_args.kwargs["end_date"]), ("2026-09-01", "2026-10-07"))
+            self.assertEqual(first["metrics_rows"], 1)
+            # same day again: everything settled is stored, nothing is fetched
+            self.assertEqual(sync.fetch_new_metrics(videos, today=today)["metrics_rows"], 0)
+            self.assertEqual(fetch.call_count, 1)
+            sync.fetch_new_metrics(videos, today=today + timedelta(days=2))
+            self.assertEqual((fetch.call_args.kwargs["start_date"], fetch.call_args.kwargs["end_date"]), ("2026-10-08", "2026-10-09"))
+            self.assertEqual(sorted(fetch.call_args.args[0]), ["vid00000001", "vid00000002"])
+        self.assertEqual(analytics_store.load_metric_totals()["vid00000001"]["views"], 20)
 
     def test_auth_errors_are_reported_not_raised(self):
         with patch.object(youtube_api, "list_channel_videos", side_effect=youtube_api.AnalyticsAuthError("run youtube_auth.py")):
@@ -502,7 +612,7 @@ class TestSync(StorageTestCase):
         self.assertIn("youtube_auth.py", status["error"])
 
     def test_metrics_failure_keeps_the_channel_data(self):
-        channel = {"channel": {}, "videos": [video("vid00000001", "x")]}
+        channel = {"channel": {}, "videos": [video("vid00000001", "x", published=time.time() - 10 * 86400)]}
         with patch.object(youtube_api, "list_channel_videos", return_value=channel), patch.object(
             youtube_api, "fetch_video_metrics", side_effect=RuntimeError("boom")
         ):
@@ -587,6 +697,13 @@ class TestReport(unittest.TestCase):
         self.assertEqual((found[0]["dimension"], found[0]["group"], found[0]["positive"]), ("Main setting", "space", True))
         self.assertTrue(any(not f["positive"] and f["group"] == "forest" for f in found))
         self.assertEqual(report.insights(df, ["Main setting"], min_videos=5), [])
+
+    def test_views_after_7_days_from_snapshots(self):
+        published = date(2026, 9, 1)
+        rows = [{"date": "2026-09-02", "views": 10}, {"date": "2026-09-07", "views": 70}, {"date": "2026-09-09", "views": 90}]
+        self.assertEqual(report.views_after(rows, published, 7), 70.0)  # Sep 8 missing: nearest within a day
+        self.assertTrue(pd.isna(report.views_after(rows[:1], published, 7)))
+        self.assertTrue(pd.isna(report.views_after([], published, 7)))
 
 
 if __name__ == "__main__":

@@ -5,6 +5,10 @@ Runs from the Analytics page's Sync button, ``POST /api/v1/analytics/sync``,
 every cron run, so a video posted by hand is marked posted before the
 calendar can upload a second copy of it.
 
+Metrics are fetched incrementally (only days not stored yet) and every
+video the app made is remembered in items.csv, so videos swept from disk
+still reconcile and still count.
+
 Reconciliation writes back to the studios: an animation or documentary
 found on the channel under its title gets the same "posted by hand" mark
 the owner can set on its library card, which takes its pending calendar
@@ -15,7 +19,7 @@ import json
 import threading
 import time
 from datetime import date as date_cls
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from loguru import logger
 
@@ -42,7 +46,9 @@ def apply_posted_marks(items: list[dict], result: dict, videos: list[dict]) -> l
     the keys that were marked.
     """
     from app.services.animation import schedule as anim_schedule
+    from app.services.animation import store as anim_store
     from app.services.documentary import doc_schedule
+    from app.services.documentary import store as doc_store
 
     by_key = {i["key"]: i for i in items}
     by_video = {v["video_id"]: v for v in videos}
@@ -57,12 +63,14 @@ def apply_posted_marks(items: list[dict], result: dict, videos: list[dict]) -> l
         video = by_video.get(match["video_id"], {})
         url, posted_on = f"https://youtu.be/{match['video_id']}", _publish_date(video)
         try:
-            if item["studio"] == "animation":
+            # The studio holds the mark (and frees calendar slots) while the
+            # project is still on disk; swept ones keep it in posted_marks.csv.
+            if item["studio"] == "animation" and item.get("on_disk") and anim_store.load_project(item["project_id"]):
                 anim_schedule.mark_posted(item["project_id"], url=url, posted_on=posted_on)
-            elif item["studio"] == "documentary":
+            elif item["studio"] == "documentary" and item.get("on_disk") and doc_store.load_project(item["project_id"]):
                 doc_schedule.mark_posted(item["project_id"], url=url, posted_on=posted_on)
             else:
-                store.mark_short_posted(key, url=url, posted_on=posted_on)
+                store.mark_posted(key, url=url, posted_on=posted_on)
         except Exception:
             logger.exception(f"analytics: could not mark {key} as posted")
             continue
@@ -73,12 +81,42 @@ def apply_posted_marks(items: list[dict], result: dict, videos: list[dict]) -> l
     return marked
 
 
+# The Analytics API keeps revising the last couple of days; only days at
+# least this old are fetched, so a stored day never changes afterwards.
+SETTLE_DAYS = 3
+
+
+def fetch_new_metrics(videos: list[dict], today: date_cls | None = None) -> dict:
+    """Fetch Analytics metrics only for the days not stored yet.
+
+    The first sync backfills from the oldest upload; after that each sync
+    asks for the few settled days since the previous one (one request per
+    200 videos), appends them to analytics.csv and compacts old rows.
+    """
+    today = today or date_cls.today()
+    end = (today - timedelta(days=SETTLE_DAYS)).isoformat()
+    through = store.metrics_through()
+    start = (date_cls.fromisoformat(through) + timedelta(days=1)).isoformat() if through else min(_publish_date(v) for v in videos)
+    if start > end:
+        return {"metrics_range": "", "metrics_rows": 0}
+    # a video published after the range cannot have data in it
+    ids = [v["video_id"] for v in videos if _publish_date(v) <= end]
+    metrics = youtube_api.fetch_video_metrics(ids, start_date=start, end_date=end) if ids else {}
+    added = store.add_metric_period(start, end, metrics)
+    store.compact_metric_periods(today.isoformat())
+    return {"metrics_range": f"{start} → {end}", "metrics_rows": added}
+
+
 def reconcile_now(videos: list[dict] | None = None) -> dict:
     """Reconcile against the stored (or given) channel list and apply marks."""
     videos = store.channel_videos() if videos is None else videos
     items = catalog.build_items()
     result = reconcile.reconcile(items, videos, store.load_links())
     result["marked_posted"] = apply_posted_marks(items, result, videos)
+    if result["marked_posted"]:
+        # record the new marks in items.csv now, before a sweep can take
+        # the project folders that hold them
+        catalog.build_items(persist=True)
     return result
 
 
@@ -92,7 +130,7 @@ def run(fetch_metrics: bool = True, categorize_topics: bool = True) -> dict:
         channel = youtube_api.list_channel_videos()
         videos = channel["videos"]
         store.save_channel(channel["channel"], videos)
-        store.record_snapshots(videos, date_cls.today().isoformat())
+        status["snapshots"] = store.record_snapshots(videos, date_cls.today().isoformat())
 
         result = reconcile_now(videos)
         status.update(
@@ -103,13 +141,8 @@ def run(fetch_metrics: bool = True, categorize_topics: bool = True) -> dict:
         )
 
         if fetch_metrics and videos:
-            # The oldest upload bounds the date range, so the one query
-            # covers every video's whole lifetime.
-            first = min(_publish_date(v) for v in videos)
             try:
-                metrics = youtube_api.fetch_video_metrics([v["video_id"] for v in videos], start_date=first)
-                store.save_metrics(metrics)
-                status["metrics"] = len(metrics)
+                status.update(fetch_new_metrics(videos))
             except youtube_api.AnalyticsAuthError:
                 raise
             except Exception as exc:
@@ -146,6 +179,12 @@ def run_before_uploads(timeout: float = 120.0) -> None:
     """
     from app.config import config
 
+    # Remember every video made so far before anything can sweep its
+    # files; this needs no YouTube access at all.
+    try:
+        catalog.build_items(persist=True)
+    except Exception:
+        logger.exception("analytics: could not refresh items.csv")
     if not config.youtube.get("analytics_sync_before_uploads", True):
         return
     if not youtube_api.readiness()[0]:
