@@ -250,6 +250,7 @@ DOC_STATUS_CHIPS = {
     doc_schedule.STATUS_UPLOADING: "⬆️ uploading",
     doc_schedule.STATUS_SCHEDULED: "📅 scheduled on YouTube",
     doc_schedule.STATUS_UPLOADED: "📥 uploaded (private draft)",
+    doc_schedule.STATUS_POSTED: "✅ posted by hand",
     doc_schedule.STATUS_FAILED: "❌ failed",
 }
 
@@ -375,7 +376,14 @@ def _render_library_tab():
                     if e.get("project_id") == pid
                     and e.get("status") != doc_schedule.STATUS_FAILED
                 ]
-                if already:
+                posted = project.get("posted") or {}
+                if posted.get("manual"):
+                    link = f" · [{posted['url']}]({posted['url']})" if posted.get("url") else ""
+                    st.success(f"✅ Posted by hand on {posted.get('date', '?')}{link}")
+                    if st.button("↩️ Unmark posted", key=f"lib_unpost_{pid}"):
+                        store.unmark_posted(pid)
+                        st.rerun()
+                elif already:
                     entry = already[-1]
                     st.info(
                         f"{DOC_STATUS_CHIPS.get(entry['status'], entry['status'])}"
@@ -397,6 +405,21 @@ def _render_library_tab():
                             topic=project["topic"],
                         )
                         st.rerun()
+                if not posted.get("manual") and not any(
+                    e["status"]
+                    in (doc_schedule.STATUS_GENERATING, doc_schedule.STATUS_UPLOADING, doc_schedule.STATUS_SCHEDULED, doc_schedule.STATUS_UPLOADED)
+                    for e in already
+                ):
+                    with st.popover("✅ Already posted"):
+                        st.caption(
+                            "Uploaded it yourself? Mark it so its calendar slot is freed "
+                            "and Analytics counts it. Without a link it is found by its title."
+                        )
+                        url = st.text_input("Video URL (optional)", key=f"lib_posted_url_{pid}")
+                        posted_on = st.date_input("Posted on", value=date_cls.today(), key=f"lib_posted_day_{pid}")
+                        if st.button("Mark as posted", key=f"lib_posted_btn_{pid}", type="primary"):
+                            doc_schedule.mark_posted(pid, url=url, posted_on=posted_on.isoformat())
+                            st.rerun()
 
 
 def _render_schedule_tab():

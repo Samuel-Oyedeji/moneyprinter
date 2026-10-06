@@ -149,6 +149,30 @@ def delete_project(project_id: str) -> None:
     shutil.rmtree(project_dir(project_id), ignore_errors=True)
 
 
+def mark_posted(project_id: str, url: str = "", posted_on: str = "") -> dict:
+    """Record that the owner uploaded this film themselves."""
+    project = load_project(project_id)
+    if not project:
+        raise KeyError(f"documentary project not found: {project_id}")
+    project["posted"] = {
+        "manual": True,
+        "url": (url or "").strip(),
+        "date": posted_on or time.strftime("%Y-%m-%d"),
+        "at": time.time(),
+    }
+    save_project(project)
+    return project
+
+
+def unmark_posted(project_id: str) -> dict:
+    project = load_project(project_id)
+    if not project:
+        raise KeyError(f"documentary project not found: {project_id}")
+    project["posted"] = {}
+    save_project(project)
+    return project
+
+
 def save_sources(project_id: str, sources: list[dict]) -> None:
     _write_json(_json_path(project_id, "sources"), sources)
 

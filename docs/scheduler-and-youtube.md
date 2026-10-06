@@ -6,6 +6,11 @@ upload to YouTube as **private drafts** (title, description, tags and
 thumbnail pre-filled), and Discord alerts telling you a video is ready to
 review and publish.
 
+> **See what works:** the WebUI's **Analytics** page pulls every video's
+> numbers back from YouTube and breaks them down by studio, topic, style and
+> batch. It also matches videos you post by hand to the app by title. See
+> [analytics.md](analytics.md).
+
 > **Detailed click-by-click setup guides:**
 > 1. [Google Cloud setup](setup-1-google-cloud.md)
 > 2. [YouTube authorization](setup-2-youtube-auth.md)
@@ -171,6 +176,11 @@ Schedule data lives in `storage/schedule/schedule.json`.
 
 Set a non-empty `api_key` under `[app]` in `config.toml` first — it protects
 every API route including the cron hook.
+
+When analytics is connected, each cron run first syncs the channel (up to
+two minutes): videos you posted by hand are matched by title and marked
+posted, so their calendar entries don't upload a second copy. Turn this off
+with `youtube.analytics_sync_before_uploads = false`.
 
 On the VPS host (runs every day at 06:00):
 

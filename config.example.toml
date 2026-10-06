@@ -502,6 +502,14 @@ publish_timezone = ""
 # Set true if you use AI-generated video (WaveSpeed) or AI-generated
 # background music (Sonilo / ElevenLabs Music).
 contains_synthetic_media = false
+# Analytics page (WebUI → Analytics). Needs the read-only permissions that
+# `python youtube_auth.py` asks for; a token authorized before analytics
+# existed keeps uploading - just run youtube_auth.py once more to add them,
+# and enable "YouTube Analytics API" in Google Cloud Console.
+# With this on, every cron run (POST /api/v1/schedules/run) first syncs the
+# channel: videos you posted by hand are matched by title and marked posted,
+# so the calendar never uploads a second copy, and the stats get refreshed.
+analytics_sync_before_uploads = true
 
 [discord]
 # Discord webhook for "video ready to publish" alerts.

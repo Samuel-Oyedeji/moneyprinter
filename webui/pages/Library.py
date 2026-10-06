@@ -19,6 +19,7 @@ if root_dir in sys.path:
 sys.path.insert(0, root_dir)
 
 from app.services import schedule as schedule_service
+from app.services.analytics import store as analytics_store
 from app.services.youtube_upload import youtube_upload_service
 from app.utils import utils
 
@@ -138,6 +139,33 @@ def _upload_panel(video: dict) -> None:
                 st.error(result.get("error", "upload failed"))
 
 
+def _posted_panel(video: dict, posted_marks: dict) -> None:
+    """Mark a video as posted by hand, for the Analytics page.
+
+    Without a URL, the next analytics sync finds it on the channel by its
+    title (the subject, unless you renamed it when posting).
+    """
+    key = f"shorts:{video['task_id']}/{video['filename']}"
+    mark = posted_marks.get(key) or {}
+    if mark.get("manual"):
+        link = f" · [link]({mark['url']})" if mark.get("url") else ""
+        st.caption(f"✅ Posted by hand on {mark.get('date', '?')}{link}")
+        if st.button("↩️ Unmark posted", key=f"lib_unpost_{key}", use_container_width=True):
+            analytics_store.unmark_short_posted(key)
+            st.rerun()
+        return
+    with st.popover("✅ Already posted", use_container_width=True):
+        st.caption(
+            "Uploaded it yourself? Mark it so Analytics counts it. Without a "
+            "link it is matched by its title on the next sync."
+        )
+        url = st.text_input("Video URL (optional)", key=f"lib_posted_url_{key}")
+        posted_on = st.date_input("Posted on", value=date.today(), key=f"lib_posted_day_{key}")
+        if st.button("Mark as posted", key=f"lib_posted_btn_{key}", type="primary"):
+            analytics_store.mark_short_posted(key, url=url, posted_on=posted_on.isoformat())
+            st.rerun()
+
+
 def _load_task_meta(task_dir: str) -> dict:
     script_file = os.path.join(task_dir, "script.json")
     try:
@@ -205,6 +233,7 @@ with count_col:
 
 columns_per_row = 4
 shown = videos[:show_count]
+posted_marks = analytics_store.load_links()["posted"]
 for row_start in range(0, len(shown), columns_per_row):
     row_videos = shown[row_start : row_start + columns_per_row]
     cols = st.columns(columns_per_row)
@@ -218,6 +247,7 @@ for row_start in range(0, len(shown), columns_per_row):
             st.caption(f"{created} · {video['size_mb']:.0f} MB")
             st.video(video["path"])
             _upload_panel(video)
+            _posted_panel(video, posted_marks)
             with st.popover("🗑 Delete files", use_container_width=True):
                 st.caption(
                     "Permanently deletes this task's folder from the server "

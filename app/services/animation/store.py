@@ -4,7 +4,7 @@ Each project lives in storage/animation/<project_id>/:
 
     project.json     - topic, context, length, aspect, voice, status, progress,
                        costs, models used, YouTube metadata, manual
-                       "already posted" mark
+                       "already posted" mark, batch id
     script.json      - the narration script (text, word count, model)
     storyboard.json  - the writer's storyboard (the script split into scenes
                        + staging)
@@ -97,6 +97,7 @@ def create_project(
     aspect: str = "9:16",
     voice: str = "",
     source: str = "manual",
+    batch_id: str = "",
 ) -> dict:
     topic = (topic or "").strip()
     if not topic:
@@ -115,6 +116,7 @@ def create_project(
         "aspect": aspect,
         "voice": voice,
         "source": source,  # manual | schedule
+        "batch_id": batch_id,  # shared by videos generated together
         "status": STATUS_QUEUED,
         "stage": "Queued",
         "progress": 0.0,

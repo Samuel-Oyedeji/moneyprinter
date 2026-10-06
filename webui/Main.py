@@ -1557,6 +1557,11 @@ def _render_top_bar():
                 label="Library",
                 icon=":material/video_library:",
             )
+            st.page_link(
+                "pages/Analytics.py",
+                label="Analytics",
+                icon=":material/monitoring:",
+            )
 
             _render_task_manager_entry()
 

@@ -151,6 +151,7 @@ def _build_entry(
     preset: str = "shorts",
     post_time: str = "",
     language: str = "",
+    batch_id: str = "",
 ) -> dict:
     """Validate one entry's fields and return a fresh, unsaved entry dict."""
     topic = (topic or "").strip()
@@ -168,6 +169,8 @@ def _build_entry(
         "preset": _validate_preset(preset),
         "post_time": _validate_post_time(post_time),
         "language": language or "",
+        # 同一次批量排期的条目共享一个 batch_id，分析页按批次对比表现。
+        "batch_id": batch_id,
         "status": STATUS_PENDING,
         "task_ids": [],
         "youtube_video_ids": [],
@@ -216,6 +219,7 @@ def create_entries(items: list[dict]) -> list[dict]:
     """
     if not items:
         return []
+    batch_id = utils.get_uuid()[:8] if len(items) > 1 else ""
     new_entries = [
         _build_entry(
             date=item.get("date", ""),
@@ -224,6 +228,7 @@ def create_entries(items: list[dict]) -> list[dict]:
             preset=item.get("preset", "shorts"),
             post_time=item.get("post_time", "") or "",
             language=item.get("language", "") or "",
+            batch_id=batch_id,
         )
         for item in items
     ]

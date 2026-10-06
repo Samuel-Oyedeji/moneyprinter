@@ -8,6 +8,9 @@ The owner then reviews and publishes them from YouTube Studio.
 Auth model: a one-time OAuth flow (``python youtube_auth.py``) stores a
 refresh token in ``storage/youtube/token.json``. All later uploads —
 including headless cron runs on a VPS — reuse and auto-refresh that token.
+The same token carries the read-only scopes the Analytics page uses; a
+token authorized before those existed keeps uploading and only needs
+``youtube_auth.py`` again to turn analytics on.
 
 Quota note: each ``videos.insert`` call costs 1600 units of the default
 10,000/day project quota, i.e. roughly 6 uploads per day unless Google
@@ -22,7 +25,15 @@ from app.config import config
 from app.utils import utils
 
 # OAuth scope for uploading videos and setting thumbnails.
-YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
+# Read access for the Analytics page: listing the channel's uploads (to
+# reconcile videos posted by hand) and reading per-video performance.
+READ_SCOPES = [
+    "https://www.googleapis.com/auth/youtube.readonly",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
+]
+# What `python youtube_auth.py` asks for.
+YOUTUBE_SCOPES = [UPLOAD_SCOPE, *READ_SCOPES]
 
 # YouTube caps: title 100 chars, description 5000 bytes, ~500 chars of tags.
 _MAX_TITLE_LENGTH = 100
@@ -83,6 +94,23 @@ class YoutubeUploadService:
     def is_configured(self) -> bool:
         return self.enabled and os.path.isfile(self.token_file)
 
+    def granted_scopes(self) -> list[str]:
+        """The scopes stored with the token, [] when there is no token."""
+        import json
+
+        try:
+            with open(self.token_file, "r", encoding="utf-8") as f:
+                scopes = json.load(f).get("scopes") or []
+        except (OSError, ValueError, AttributeError):
+            return []
+        if isinstance(scopes, str):
+            scopes = scopes.split()
+        return list(scopes)
+
+    def missing_scopes(self, required: list[str]) -> list[str]:
+        granted = set(self.granted_scopes())
+        return [scope for scope in required if scope not in granted]
+
     def _load_credentials(self):
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
@@ -93,8 +121,11 @@ class YoutubeUploadService:
                 "Run `python youtube_auth.py` once to authorize."
             )
 
+        # 按令牌自身保存的授权范围加载：刷新时请求比授权时更多的范围会被
+        # Google 拒绝（invalid_scope），老令牌只有上传权限，不能因为新增了
+        # 分析权限就让上传失效。
         credentials = Credentials.from_authorized_user_file(
-            self.token_file, YOUTUBE_SCOPES
+            self.token_file, self.granted_scopes() or [UPLOAD_SCOPE]
         )
         if credentials.expired and credentials.refresh_token:
             logger.info("refreshing expired YouTube credentials")
@@ -108,17 +139,27 @@ class YoutubeUploadService:
         return credentials
 
     def _save_credentials(self, credentials) -> None:
+        import json
+
         token_dir = os.path.dirname(self.token_file)
         if token_dir:
             os.makedirs(token_dir, exist_ok=True)
+        data = json.loads(credentials.to_json())
+        # Google's consent screen lets the owner untick individual scopes, so
+        # store what was actually granted rather than what was asked for.
+        granted = getattr(credentials, "granted_scopes", None)
+        if isinstance(granted, str):
+            granted = granted.split()
+        if granted:
+            data["scopes"] = list(granted)
         with open(self.token_file, "w", encoding="utf-8") as f:
-            f.write(credentials.to_json())
+            json.dump(data, f)
 
-    def _build_client(self):
+    def _build_client(self, service: str = "youtube", version: str = "v3"):
         from googleapiclient.discovery import build
 
         return build(
-            "youtube", "v3", credentials=self._load_credentials(), cache_discovery=False
+            service, version, credentials=self._load_credentials(), cache_discovery=False
         )
 
     def run_auth_flow(self) -> str:
@@ -136,12 +177,21 @@ class YoutubeUploadService:
                 "create an OAuth Desktop client, and save its JSON there."
             )
 
+        # Accept a partial grant (e.g. upload only) instead of oauthlib
+        # raising "Scope has changed"; missing scopes are reported later.
+        os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
         flow = InstalledAppFlow.from_client_secrets_file(
             self.client_secrets_file, YOUTUBE_SCOPES
         )
         credentials = flow.run_local_server(port=0, open_browser=True)
         self._save_credentials(credentials)
         logger.success(f"YouTube authorization saved to {self.token_file}")
+        missing = self.missing_scopes(YOUTUBE_SCOPES)
+        if missing:
+            logger.warning(
+                "not every permission was granted, so some features stay off: "
+                + ", ".join(missing)
+            )
         return self.token_file
 
     def upload_video(
