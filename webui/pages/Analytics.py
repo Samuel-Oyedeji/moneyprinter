@@ -7,6 +7,8 @@ Batches    - each generation batch and its best / weakest video; batch vs single
 Videos     - every video with its numbers; edit topic categories
 Reconcile  - which channel video is which app video: hand-posted uploads
              found by title, near-miss titles to confirm, leftovers to link
+Assistant  - a chat (OpenRouter) about the numbers, with attachable metric
+             tags, a model picker and saved history
 """
 import os
 import sys
@@ -22,6 +24,7 @@ if root_dir in sys.path:
 sys.path.insert(0, root_dir)
 
 from app.services.analytics import catalog, reconcile, report, store, sync, topics, youtube_api  # noqa: E402
+from webui import analytics_assistant_ui  # noqa: E402
 
 st.set_page_config(page_title="Channel Analytics", page_icon="📈", layout="wide")
 st.page_link("Main.py", label="Back to generator", icon=":material/arrow_back:")
@@ -152,7 +155,7 @@ if days:
     df = df[df["published_at"] >= cutoff]
 
 to_review = len(result["suggestions"]) + len(result["missing_posted"]) + len(result["duplicates"])
-tabs = st.tabs(["Overview", "What works", "Batches", "Videos", f"Reconcile{f' ({to_review})' if to_review else ''}"])
+tabs = st.tabs(["Overview", "What works", "Batches", "Videos", f"Reconcile{f' ({to_review})' if to_review else ''}", "💬 Assistant"])
 
 
 # --------------------------------------------------------------------- helpers
@@ -560,3 +563,9 @@ with tabs[4]:
                 k, m = linked[choice]
                 store.reject(k, m["video_id"])
                 _refresh()
+
+
+# =================================================================== assistant
+with tabs[5]:
+    # All published videos; the chat has its own data-range picker.
+    analytics_assistant_ui.render(df_all)

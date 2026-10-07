@@ -528,6 +528,14 @@ posted_days = 7
 unposted_days = 30
 cache_days = 7
 
+[assistant]
+# The chat on the Analytics page (💬 Assistant tab). It uses the same
+# OpenRouter key and provider as the Animation studio ([app]
+# openrouter_api_key, [animation] llm_provider). Default model for new
+# chats; empty = the Animation studio's writer model. Change it from the
+# chat itself; any OpenRouter model ID works.
+model = ""
+
 [discord]
 # Discord webhook for "video ready to publish" alerts.
 # Channel settings > Integrations > Webhooks > New Webhook > Copy URL
