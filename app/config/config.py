@@ -502,6 +502,7 @@ def save_config():
         config_to_save["discord"] = dict(discord)
         config_to_save["documentary"] = dict(documentary)
         config_to_save["animation"] = dict(animation)
+        config_to_save["sweeper"] = dict(sweeper)
         config_to_save["ui"] = dict(ui)
         serialized_config = toml.dumps(config_to_save)
 
@@ -581,6 +582,7 @@ def reload_config() -> None:
             ("discord", discord),
             ("documentary", documentary),
             ("animation", animation),
+            ("sweeper", sweeper),
             ("ui", ui),
         ):
             section.clear()
@@ -602,6 +604,7 @@ youtube = _SynchronizedConfig(_cfg.get("youtube", {}))
 discord = _SynchronizedConfig(_cfg.get("discord", {}))
 documentary = _SynchronizedConfig(_cfg.get("documentary", {}))
 animation = _SynchronizedConfig(_cfg.get("animation", {}))
+sweeper = _SynchronizedConfig(_cfg.get("sweeper", {}))
 ui = _SynchronizedConfig(
     _cfg.get(
         "ui",

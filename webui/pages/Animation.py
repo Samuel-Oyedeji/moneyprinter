@@ -12,6 +12,7 @@ Schedule- single and batch YouTube scheduling on the animation calendar,
 import os
 import sys
 import threading
+import uuid
 from datetime import date as date_cls
 from datetime import datetime
 from datetime import time as time_cls
@@ -348,7 +349,8 @@ def _render_create():
         if not items:
             st.error("Add a topic first.")
         else:
-            created = [store.create_project(i["topic"], i["context"], seconds, aspect, voice) for i in items]
+            batch_id = uuid.uuid4().hex[:8] if len(items) > 1 else ""
+            created = [store.create_project(i["topic"], i["context"], seconds, aspect, voice, batch_id=batch_id) for i in items]
             jobs.enqueue([p["project_id"] for p in created])
             st.success(f"Queued {len(created)} video(s). They render one at a time; progress below.")
 

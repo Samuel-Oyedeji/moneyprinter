@@ -7,7 +7,8 @@ budget, so every planner asks here before booking a day.
 
 Counted per calendar date (the day the upload runs):
   Shorts         every non-failed entry, times its video_count
-  Documentaries  every non-failed entry
+  Documentaries  every entry except failed ones and ones marked as already
+                 posted by hand
   Animations     every entry except failed ones and ones marked as already
                  posted by hand (those never touch the API)
 """
@@ -28,9 +29,7 @@ def daily_load(day: str) -> dict:
         for e in shorts_schedule.list_entries(start_date=day, end_date=day)
         if e.get("status") != "failed"
     )
-    documentaries = sum(
-        1 for e in doc_schedule.list_entries() if e.get("date") == day and e.get("status") != doc_schedule.STATUS_FAILED
-    )
+    documentaries = sum(1 for e in doc_schedule.list_entries() if e.get("date") == day and doc_schedule.counts_toward_budget(e))
     animations = sum(1 for e in animation_schedule.list_entries() if e.get("date") == day and animation_schedule.counts_toward_budget(e))
     total = shorts + documentaries + animations
     return {

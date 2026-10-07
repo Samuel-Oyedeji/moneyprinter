@@ -225,33 +225,49 @@ def run_schedules(request: Request, body: ScheduleRunRequest = None):
 
     # 生成一批视频可能耗时数十分钟，cron 的 curl 不应等待。
     # run_due_entries 内部有互斥锁，重复触发会被安全跳过。
-    thread = threading.Thread(
-        target=schedule_service.run_due_entries,
+    threading.Thread(
+        target=_run_all_calendars,
         kwargs={"run_date": run_date},
         daemon=True,
         name="schedule-run",
-    )
-    thread.start()
-
-    # Documentary entries live on their own calendar but share this cron
-    # hook; the runner has its own lock, so double triggers are safe.
-    from app.services.documentary import doc_schedule as documentary_schedule
-
-    threading.Thread(
-        target=documentary_schedule.run_due_entries,
-        kwargs={"run_date": run_date},
-        daemon=True,
-        name="documentary-schedule-run",
-    ).start()
-
-    # Animations too: same hook, own calendar, own lock.
-    from app.services.animation import schedule as animation_schedule
-
-    threading.Thread(
-        target=animation_schedule.run_due_entries,
-        kwargs={"run_date": run_date},
-        daemon=True,
-        name="animation-schedule-run",
     ).start()
     logger.info(f"schedule run triggered, request_id: {request_id}")
     return utils.get_response(200, {"triggered": True, "date": run_date})
+
+
+def _run_all_calendars(run_date=None) -> None:
+    """Sync the channel, clean up storage, then run all three calendars.
+
+    The sync goes first so a video the owner already posted by hand is
+    marked posted before its calendar entry could upload it again. It is
+    best-effort and time-boxed: without analytics access it is skipped.
+    """
+    from app.services.analytics import sync as analytics_sync
+    from app.services.animation import schedule as animation_schedule
+    from app.services.documentary import doc_schedule as documentary_schedule
+
+    try:
+        analytics_sync.run_before_uploads()
+    except Exception:
+        logger.exception("analytics sync before uploads failed; running uploads anyway")
+
+    # Storage clean-up after the sync (so hand-posted videos count as
+    # posted) and before the calendars start new renders.
+    from app.services import sweeper
+
+    try:
+        sweeper.run_scheduled()
+    except Exception:
+        logger.exception("storage clean-up failed; running uploads anyway")
+
+    # Documentaries and animations live on their own calendars but share
+    # this cron hook; each runner has its own lock, so double triggers are
+    # safe.
+    for name, runner in (
+        ("schedule-run-shorts", schedule_service.run_due_entries),
+        ("documentary-schedule-run", documentary_schedule.run_due_entries),
+        ("animation-schedule-run", animation_schedule.run_due_entries),
+    ):
+        threading.Thread(
+            target=runner, kwargs={"run_date": run_date}, daemon=True, name=name
+        ).start()

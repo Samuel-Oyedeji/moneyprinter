@@ -35,6 +35,7 @@ STATUS_GENERATING = "generating"
 STATUS_UPLOADING = "uploading"
 STATUS_SCHEDULED = "scheduled"  # uploaded with a publishAt time
 STATUS_UPLOADED = "uploaded"  # uploaded as a private draft
+STATUS_POSTED = "posted"  # the owner uploaded it by hand
 STATUS_FAILED = "failed"
 
 ACTIVE_STATUSES = (STATUS_PENDING, STATUS_GENERATING, STATUS_UPLOADING)
@@ -136,6 +137,23 @@ def delete_entry(entry_id: str) -> None:
     with _store_lock:
         entries = [e for e in _load_entries() if e.get("id") != entry_id]
         _save_entries(entries)
+
+
+def counts_toward_budget(entry: dict) -> bool:
+    return entry.get("status") not in (STATUS_FAILED, STATUS_POSTED)
+
+
+def mark_posted(project_id: str, url: str = "", posted_on: str = "") -> dict:
+    """The owner uploaded this film themselves: record it and free its slot.
+
+    Pending (and failed) entries for the film stop, so the calendar never
+    uploads a second copy of something already on the channel.
+    """
+    project = store.mark_posted(project_id, url=url, posted_on=posted_on)
+    for entry in list_entries():
+        if entry.get("project_id") == project_id and entry.get("status") in (STATUS_PENDING, STATUS_FAILED):
+            _patch_entry(entry["id"], status=STATUS_POSTED, error="")
+    return project
 
 
 def reset_entry(entry_id: str) -> dict:

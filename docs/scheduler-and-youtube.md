@@ -6,11 +6,17 @@ upload to YouTube as **private drafts** (title, description, tags and
 thumbnail pre-filled), and Discord alerts telling you a video is ready to
 review and publish.
 
+> **See what works:** the WebUI's **Analytics** page pulls every video's
+> numbers back from YouTube and breaks them down by studio, topic, style and
+> batch. It also matches videos you post by hand to the app by title. See
+> [analytics.md](analytics.md).
+
 > **Detailed click-by-click setup guides:**
 > 1. [Google Cloud setup](setup-1-google-cloud.md)
 > 2. [YouTube authorization](setup-2-youtube-auth.md)
 > 3. [Discord alerts](setup-3-discord.md)
 > 4. [VPS deployment](setup-4-vps-deploy.md)
+> 5. [YouTube Analytics](setup-5-youtube-analytics.md) (for the Analytics page)
 
 ## How it works
 
@@ -171,6 +177,19 @@ Schedule data lives in `storage/schedule/schedule.json`.
 
 Set a non-empty `api_key` under `[app]` in `config.toml` first — it protects
 every API route including the cron hook.
+
+Each cron run does three things, in order:
+
+1. **Analytics sync** (when connected, up to two minutes): videos you
+   posted by hand are matched by title and marked posted, so their
+   calendar entries don't upload a second copy. Turn it off with
+   `youtube.analytics_sync_before_uploads = false`.
+2. **Storage clean-up**: deletes the files of videos posted over 7 days
+   ago, never-posted ones over 30 days old, and stock clips over 7 days
+   old. Nothing booked on a calendar is touched. See
+   [storage-cleanup.md](storage-cleanup.md); turn it off with
+   `[sweeper] enabled = false`.
+3. **Due calendar entries**: generated and uploaded.
 
 On the VPS host (runs every day at 06:00):
 

@@ -29,9 +29,14 @@ What happens:
    This is expected — it's your own app in testing mode.
    Click **Continue** (you may need to click "Advanced" →
    "Go to MoneyPrinterTurbo (unsafe)" first, depending on the screen shown).
-4. On the permissions screen ("MoneyPrinterTurbo wants access to your
-   Google Account — Upload videos to your YouTube channel"), click
-   **Continue** / **Allow**.
+4. On the permissions screen, tick **every** box and click **Continue** /
+   **Allow**. There are three: upload videos, *view* your YouTube account,
+   and *view* YouTube Analytics reports. The two read-only ones power the
+   Analytics page; untick them and uploads still work, analytics stays off.
+
+   > **Authorized before the Analytics page existed?** Your old token keeps
+   > uploading. Run `youtube_auth.py` once more (and copy the new
+   > `token.json` to your VPS) to turn analytics on.
 5. The browser shows "The authentication flow has completed. You may close
    this window." — close it.
 6. The terminal prints a success line with the token path.
@@ -80,7 +85,8 @@ The Schedule page in the WebUI will also stop showing the
 
 ---
 
-**Done.** Continue with [setup-3-discord.md](setup-3-discord.md).
+**Done.** Continue with [setup-3-discord.md](setup-3-discord.md). For the
+Analytics page, see [setup-5-youtube-analytics.md](setup-5-youtube-analytics.md).
 
 ## What to know
 

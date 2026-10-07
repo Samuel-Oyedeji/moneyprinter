@@ -276,6 +276,7 @@ def _ensure_video(entry: dict) -> dict:
             aspect=entry.get("aspect", "9:16"),
             voice=entry.get("voice", ""),
             source="schedule",
+            batch_id=entry.get("batch_id", ""),
         )
         project_id = project["project_id"]
         _patch(entry["id"], project_id=project_id)
