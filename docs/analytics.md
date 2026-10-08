@@ -153,6 +153,9 @@ The Reconcile tab also lists:
   creation time and marked "guessed".
 - **Videos**: every video with its numbers, CSV download, and the topic
   category editor.
+- **💬 Assistant**: a chat about your numbers, with metric tags to attach,
+  a model picker and saved history. See
+  [analytics-assistant.md](analytics-assistant.md).
 
 **Topic categories** are assigned by the app's configured LLM on each sync.
 It reuses existing categories so the set stays small. Correct any of them
