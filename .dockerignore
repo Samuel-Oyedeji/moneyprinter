@@ -28,3 +28,12 @@ logs/
 
 storage/
 config.toml
+
+# The Remotion renderer installs its npm packages and headless Chrome into
+# remotion/node_modules at first render. That tree is ~800MB, is written by
+# the container as root, and is bind-mounted back in by compose anyway — so
+# shipping it in the build context only bloats the upload and makes an
+# unprivileged `docker compose build` fail with "permission denied" on
+# chrome-headless-shell.
+remotion/node_modules/
+remotion/.remotion/
