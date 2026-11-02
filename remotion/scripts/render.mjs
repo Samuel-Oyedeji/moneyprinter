@@ -1,7 +1,7 @@
 // Render one story to MP4 for the Animation pipeline.
 //
 //   node scripts/render.mjs --props story.json --public-dir <job>/public --out final.mp4
-//        [--scale 1] [--concurrency N]
+//        [--scale 1] [--concurrency N] [--timeout ms]
 //
 // Bundles once with the job's public folder (it holds only the narration),
 // renders the PaperStory composition, and prints one JSON line per progress
@@ -23,12 +23,14 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const inputProps = JSON.parse(fs.readFileSync(args.props, "utf8"));
 const publicDir = path.resolve(args["public-dir"]);
 const outDir = path.join(path.dirname(publicDir), ".bundle");
+// How long one frame may take; Remotion's 30 s default is too tight on a busy server.
+const timeoutInMilliseconds = args.timeout ? Number(args.timeout) : 120000;
 if (path.resolve(outDir).startsWith(publicDir + path.sep)) throw new Error("bundle dir must not be inside the public dir");
 
 try {
   say({ stage: "bundling", progress: 0 });
   const serveUrl = await bundle({ entryPoint: path.join(root, "src/index.ts"), publicDir, outDir });
-  const composition = await selectComposition({ serveUrl, id: "PaperStory", inputProps });
+  const composition = await selectComposition({ serveUrl, id: "PaperStory", inputProps, timeoutInMilliseconds });
   let last = -1;
   await renderMedia({
     composition,
@@ -38,6 +40,7 @@ try {
     inputProps,
     scale: args.scale ? Number(args.scale) : 1,
     concurrency: args.concurrency ? Number(args.concurrency) : null,
+    timeoutInMilliseconds,
     onProgress: ({ progress }) => {
       const pct = Math.floor(progress * 100);
       if (pct !== last) {

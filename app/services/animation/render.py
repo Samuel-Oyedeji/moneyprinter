@@ -8,6 +8,7 @@ own headless Chrome the first time it renders).
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -25,10 +26,16 @@ _NODE_CANDIDATES = (
     "/usr/bin/node",
 )
 _install_lock = threading.Lock()
+FRAME_TIMEOUT_SECONDS = 120
+_FRAME_TIMEOUT = re.compile(r"Timeout \(\d+ms\) exceeded")
 
 
 class RenderError(RuntimeError):
     pass
+
+
+class FrameTimeoutError(RenderError):
+    """One frame took longer than the frame timeout: usually a busy CPU."""
 
 
 def remotion_dir() -> str:
@@ -57,6 +64,12 @@ def readiness() -> tuple[bool, str]:
     return True, "Renderer ready"
 
 
+def default_concurrency() -> int:
+    """Remotion's own default tab count: half the CPUs, between 1 and 8."""
+    cpus = getattr(os, "process_cpu_count", os.cpu_count)() or 2
+    return round(min(8, max(1, cpus / 2)))
+
+
 def ensure_installed() -> None:
     with _install_lock:
         if os.path.isdir(os.path.join(remotion_dir(), "node_modules", "@remotion")):
@@ -83,15 +96,32 @@ def render_story(
     concurrency: int | None = None,
     timeout: float = 3600,
 ) -> str:
-    """Render story_path to out_path; on_progress(fraction) as frames finish."""
+    """Render story_path to out_path; on_progress(fraction) as frames finish.
+
+    A frame that times out means the machine is too busy for that many
+    browser tabs, so the render runs once more with half of them.
+    """
     ensure_installed()
+    concurrency = int(concurrency or config.animation.get("render_concurrency") or 0) or None
+    try:
+        return _render_once(story_path, public_dir, out_path, on_progress, scale, concurrency, timeout)
+    except FrameTimeoutError as exc:
+        tabs = concurrency or default_concurrency()
+        if tabs <= 1:
+            raise
+        logger.warning(f"{exc}; rendering again with {tabs // 2} tab(s) instead of {tabs}")
+        return _render_once(story_path, public_dir, out_path, on_progress, scale, tabs // 2, timeout)
+
+
+def _render_once(story_path, public_dir, out_path, on_progress, scale, concurrency, timeout) -> str:
     node = node_binary()
     cmd = [node, "scripts/render.mjs", "--props", story_path, "--public-dir", public_dir, "--out", out_path]
     if scale:
         cmd += ["--scale", str(scale)]
-    concurrency = concurrency or config.animation.get("render_concurrency")
     if concurrency:
         cmd += ["--concurrency", str(int(concurrency))]
+    frame_timeout = max(7.0, float(config.animation.get("render_frame_timeout") or FRAME_TIMEOUT_SECONDS))  # Remotion's minimum
+    cmd += ["--timeout", str(int(frame_timeout * 1000))]
     env = {**os.environ, "PATH": f"{os.path.dirname(node)}{os.pathsep}{os.environ.get('PATH', '')}"}
 
     tmp_out = f"{out_path}.part.mp4"
@@ -127,6 +157,8 @@ def render_story(
         detail = error or "\n".join(tail) or f"exit code {code}"
         if timed_out.is_set():
             detail = f"render timed out after {int(timeout)}s"
+        elif _FRAME_TIMEOUT.search(detail):
+            raise FrameTimeoutError(f"Remotion render failed: {detail[-1500:]}")
         raise RenderError(f"Remotion render failed: {detail[-1500:]}")
     os.replace(tmp_out, out_path)
     return out_path

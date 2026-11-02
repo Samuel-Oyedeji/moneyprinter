@@ -633,6 +633,9 @@ default_seconds = 30
 default_aspect = "9:16"            # "9:16" or "16:9"
 # Remotion render concurrency (browser tabs); empty = Remotion's default.
 # render_concurrency = 4
+# Seconds one frame may take before the render gives up (Remotion's own
+# default is 30). A frame timeout is retried once with half the tabs.
+# render_frame_timeout = 120
 # elevenlabs_price_per_1k_chars = 0.10
 
 # =============================================================================
