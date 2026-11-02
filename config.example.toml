@@ -481,7 +481,8 @@ compute_type = "int8"
 #      storage/youtube/client_secret.json
 #   3. Run: python youtube_auth.py  (opens a browser to sign in once)
 #   4. Set enabled = true below
-# Quota: each upload costs 1600 of the default 10,000 daily units (~6/day).
+# Quota: since June 2026 uploads have their own allowance of 100 a day per
+# Google Cloud project, separate from the 10,000 units other calls use.
 enabled = false
 client_secrets_file = ""   # default: storage/youtube/client_secret.json
 token_file = ""            # default: storage/youtube/token.json
@@ -510,6 +511,10 @@ contains_synthetic_media = false
 # channel: videos you posted by hand are matched by title and marked posted,
 # so the calendar never uploads a second copy, and the stats get refreshed.
 analytics_sync_before_uploads = true
+# Most uploads a day across every calendar and studio together (Shorts,
+# documentaries, animations, studios). The API allows 100; staying well
+# under it leaves room for retries and hand uploads.
+daily_upload_budget = 50
 
 [sweeper]
 # Daily storage clean-up, run by the cron hook (POST /api/v1/schedules/run)
@@ -535,6 +540,19 @@ cache_days = 7
 # chats; empty = the Animation studio's writer model. Change it from the
 # chat itself; any OpenRouter model ID works.
 model = ""
+
+[studios]
+# Autonomous studios (docs/studios-pilot-plan.md): each studio's agent plans
+# its own videos and uploads them to the channel. Every studio is created
+# paused; unpause it on the Studios page once you've checked its rules.
+# Studio data lives in storage/studios/<studio id>/.
+enabled = false
+# Global kill switch: true stops every studio from planning, making or
+# uploading anything (each studio also has its own pause).
+paused = false
+# Default model for the planning agent (an OpenRouter model ID); a studio's
+# own planner_model wins. Empty = the Animation studio's writer model.
+planner_model = ""
 
 [discord]
 # Discord webhook for "video ready to publish" alerts.

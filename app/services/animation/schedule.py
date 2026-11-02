@@ -9,8 +9,8 @@ storage/animation/_schedule.json and the existing cron hook
   auto    - a topic; on the due date the video is generated, then uploaded.
 
 Every booking goes through app.services.upload_budget, so animations never
-push a day past the 6 uploads that Shorts, documentaries and animations
-share. Videos the owner uploads by hand are marked "posted": they leave the
+push a day past the daily upload budget that every calendar and studio
+shares. Videos the owner uploads by hand are marked "posted": they leave the
 calendar and stop counting against the budget.
 """
 
@@ -214,6 +214,14 @@ def mark_posted(project_id: str, url: str = "", posted_on: str = "") -> dict:
 
 
 # ------------------------------------------------------------ batch planning
+def max_per_day() -> int:
+    """A batch's videos per day: the shared budget, and no more than the
+    Shorts calendar's evenly spaced slots (its spacing rule is reused)."""
+    from app.services import schedule as shorts_schedule
+
+    return min(upload_budget.daily_budget(), shorts_schedule.DAILY_VIDEO_LIMIT)
+
+
 def _slot_times(per_day: int) -> list[str]:
     from app.services import schedule as shorts_schedule
 
@@ -235,8 +243,8 @@ def plan_batch(items: list[dict], per_day: int = 1, start_date: str | None = Non
     """
     if not items:
         raise ValueError("nothing to schedule")
-    if not isinstance(per_day, int) or not 1 <= per_day <= upload_budget.DAILY_BUDGET:
-        raise ValueError(f"per_day must be between 1 and {upload_budget.DAILY_BUDGET}")
+    if not isinstance(per_day, int) or not 1 <= per_day <= max_per_day():
+        raise ValueError(f"per_day must be between 1 and {max_per_day()}")
     reference = now or _now()
     day = date_cls.fromisoformat(_validate_date(start_date)) if start_date else reference.date()
     slots = _slot_times(per_day)

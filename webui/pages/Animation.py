@@ -6,8 +6,8 @@ Create  - one topic or a batch, a length, an aspect ratio and an ElevenLabs
 Library - finished videos: preview, edit the YouTube copy, schedule, upload,
           or mark as already posted.
 Schedule- single and batch YouTube scheduling on the animation calendar,
-          booked against the 6-a-day upload budget shared with Shorts and
-          documentaries.
+          booked against the daily upload budget shared with Shorts,
+          documentaries and studios.
 """
 import os
 import sys
@@ -261,7 +261,7 @@ def _load_line(day_iso: str) -> tuple[str, dict]:
     load = upload_budget.daily_load(day_iso)
     line = (
         f"{load['total']}/{load['budget']} uploads booked on {day_iso}: Shorts {load['shorts']}, "
-        f"documentaries {load['documentaries']}, animations {load['animations']}."
+        f"documentaries {load['documentaries']}, animations {load['animations']}, studios {load['studios']}."
     )
     return line, load
 
@@ -475,7 +475,7 @@ def _library_card(p: dict):
                     "⬆️ Upload now",
                     key=f"lib_now_{pid}",
                     disabled=today_load["full"],
-                    help="Uploads today as a private draft (uses one of today's 6 uploads).",
+                    help=f"Uploads today as a private draft (uses one of today's {today_load['budget']} uploads).",
                 ):
                     try:
                         anim_schedule.upload_now(pid)
@@ -557,13 +557,14 @@ def _render_budget_strip():
                 "Shorts": r["shorts"],
                 "Documentaries": r["documentaries"],
                 "Animations": r["animations"],
+                "Studios": r["studios"],
                 "Booked": f"{r['total']}/{r['budget']}",
                 "Free": r["left"],
             }
             for r in rows
         ]
     )
-    with st.expander("📊 Upload budget, next 14 days (shared by every calendar, 6 a day)"):
+    with st.expander(f"📊 Upload budget, next 14 days (shared by every calendar and studio, {upload_budget.daily_budget()} a day)"):
         st.dataframe(frame, hide_index=True, use_container_width=True)
 
 
@@ -631,7 +632,7 @@ def _render_schedule():
                     aspect = c2.radio("Aspect ratio", list(ASPECT_LABELS), format_func=ASPECT_LABELS.get, key="batch_aspect", horizontal=True)
                     items = []
                 c1, c2 = st.columns(2)
-                per_day = c1.number_input("Animations per day", min_value=1, max_value=upload_budget.DAILY_BUDGET, value=1, key="batch_per_day")
+                per_day = c1.number_input("Animations per day", min_value=1, max_value=anim_schedule.max_per_day(), value=1, key="batch_per_day")
                 start = c2.date_input("Start from (optional)", value=None, min_value=date_cls.today(), key="batch_start")
                 st.caption(
                     "Each day only takes what the shared budget leaves free after Shorts and documentaries, "

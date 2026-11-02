@@ -1,4 +1,4 @@
-"""Animation scheduling against the shared 6-a-day YouTube upload budget."""
+"""Animation scheduling against the shared YouTube upload budget (6 a day here)."""
 import os
 import sys
 import tempfile
@@ -15,6 +15,7 @@ from app.services import upload_budget, youtube_upload  # noqa: E402
 from app.services.animation import jobs, pipeline, store  # noqa: E402
 from app.services.animation import schedule as anim_schedule  # noqa: E402
 from app.services.documentary import doc_schedule  # noqa: E402
+from app.services.studios import store as studio_store  # noqa: E402
 
 
 class ScheduleTestCase(unittest.TestCase):
@@ -28,6 +29,8 @@ class ScheduleTestCase(unittest.TestCase):
             (store, "animation_dir", lambda: root),
             (shorts_schedule, "_schedule_file", lambda: os.path.join(root, "shorts.json")),
             (doc_schedule, "_schedule_file", lambda: os.path.join(root, "docs.json")),
+            (studio_store, "studios_dir", lambda: root),
+            (upload_budget, "daily_budget", lambda: 6),
         ):
             patcher = patch.object(target, attr, value)
             patcher.start()
