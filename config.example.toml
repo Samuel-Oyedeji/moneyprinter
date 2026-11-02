@@ -636,6 +636,8 @@ default_aspect = "9:16"            # "9:16" or "16:9"
 # Seconds one frame may take before the render gives up (Remotion's own
 # default is 30). A frame timeout is retried once with half the tabs.
 # render_frame_timeout = 120
+# Seconds a whole render may take before it is stopped (default 3 hours).
+# render_timeout = 10800
 # elevenlabs_price_per_1k_chars = 0.10
 
 # =============================================================================

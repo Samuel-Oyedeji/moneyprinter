@@ -27,6 +27,7 @@ _NODE_CANDIDATES = (
 )
 _install_lock = threading.Lock()
 FRAME_TIMEOUT_SECONDS = 120
+RENDER_TIMEOUT_SECONDS = 3 * 3600  # a 55 s video takes about 70 min on a 6-CPU server
 _FRAME_TIMEOUT = re.compile(r"Timeout \(\d+ms\) exceeded")
 
 
@@ -94,7 +95,7 @@ def render_story(
     on_progress=None,
     scale: float | None = None,
     concurrency: int | None = None,
-    timeout: float = 3600,
+    timeout: float | None = None,
 ) -> str:
     """Render story_path to out_path; on_progress(fraction) as frames finish.
 
@@ -102,6 +103,7 @@ def render_story(
     browser tabs, so the render runs once more with half of them.
     """
     ensure_installed()
+    timeout = timeout or float(config.animation.get("render_timeout") or RENDER_TIMEOUT_SECONDS)
     concurrency = int(concurrency or config.animation.get("render_concurrency") or 0) or None
     try:
         return _render_once(story_path, public_dir, out_path, on_progress, scale, concurrency, timeout)

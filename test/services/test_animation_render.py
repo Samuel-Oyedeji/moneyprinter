@@ -63,7 +63,7 @@ class TestFrameTimeout(unittest.TestCase):
         for p in (
             patch.object(render, "ensure_installed", lambda: None),
             patch.object(render, "node_binary", lambda: "/usr/bin/node"),
-            patch.dict(config.animation, {"render_concurrency": "", "render_frame_timeout": ""}),
+            patch.dict(config.animation, {"render_concurrency": "", "render_frame_timeout": "", "render_timeout": ""}),
         ):
             p.start()
             self.addCleanup(p.stop)
@@ -79,6 +79,20 @@ class TestFrameTimeout(unittest.TestCase):
         with patch.dict(config.animation, {"render_frame_timeout": 2}):
             self.run_render(node)
         self.assertEqual(node.flag(1, "--timeout"), "7000")  # Remotion refuses less
+
+    def test_a_whole_render_gets_three_hours_unless_configured(self):
+        limits = []
+        real_timer = render.threading.Timer
+
+        def timer(seconds, fn):
+            limits.append(seconds)
+            return real_timer(seconds, fn)
+
+        with patch.object(render.threading, "Timer", timer):
+            self.run_render(FakeNode([None]))
+            with patch.dict(config.animation, {"render_timeout": 5400}):
+                self.run_render(FakeNode([None]))
+        self.assertEqual(limits, [3 * 3600, 5400])
 
     def test_a_timed_out_frame_renders_again_with_half_the_tabs(self):
         node = FakeNode([FRAME_TIMEOUT, None])
