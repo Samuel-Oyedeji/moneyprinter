@@ -322,3 +322,34 @@ switch) and the full UI redesign.
    OpenRouter). It runs about once a week, so a stronger model is cheap if
    you want one.
 5. **Weekly budget:** $10 (expected spend is about $4–6).
+
+---
+
+## 10. Running it (built in WP5)
+
+The tick (`app/services/studios/runner.py`) does what is due and nothing
+else, so it runs hourly. **On the server**, add this crontab line next to the
+daily calendar one (same API key):
+
+```
+5 * * * * curl -s -X POST http://127.0.0.1:9000/api/v1/studios/tick -H "x-api-key: YOUR-API-KEY-HERE" >> $HOME/mpt-studios.log 2>&1
+```
+
+It returns at once; the work runs in the API container. Nothing happens until:
+
+1. `[studios] enabled = true` in config.toml, and `[studios] paused` is false;
+2. the studio exists and is unpaused (WP7's Studios page; until then, set
+   `"paused": false` in `storage/studios/animation/studio.json`);
+3. YouTube uploads are set up (`[youtube] enabled` + token). Without them
+   videos are still made and wait as "ready", with a daily incident.
+
+`GET /api/v1/studios` shows each studio's queue counts and latest event.
+
+What one tick does, in order: refresh analytics (if 20h+ old) → plan
+(Sundays, or a studio's first tick) → pick up anything a restart cut off →
+drop planned videos 6h past their slot → upload ready videos (slot ≤ 90
+min away and the cancel window over) → produce videos due within 36h (QA,
+one fix, else a reserve) → upload again → 3- and 7-day check-ins.
+
+QA lives in `app/services/studios/qa.py`. The critic uses the studio's
+planner model.

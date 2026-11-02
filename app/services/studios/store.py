@@ -265,6 +265,18 @@ def save_experiment(studio_id: str, experiment: dict) -> dict:
     return clean
 
 
+def active_project_ids() -> set[str]:
+    """Projects a studio still needs on disk (not uploaded, not dropped):
+    the storage sweeper must leave them alone."""
+    waiting = (model.SLOT_PLANNED, model.SLOT_PRODUCING, model.SLOT_READY, model.SLOT_UPLOADING)
+    return {
+        slot["project_id"]
+        for studio in list_studios()
+        for slot in load_queue(studio["id"])
+        if slot.get("project_id") and slot.get("status") in waiting
+    }
+
+
 def daily_slot_count(day: str) -> int:
     """Uploads every studio has booked on a date (for upload_budget)."""
     return sum(

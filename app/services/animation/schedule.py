@@ -298,8 +298,11 @@ def _ensure_video(entry: dict) -> dict:
     return project
 
 
-def _upload(entry: dict, project: dict) -> str:
-    from app.services import schedule as shorts_schedule
+def upload_project(project: dict, publish_at: str | None) -> str:
+    """Upload a finished animation (writing its YouTube copy first if it has
+    none) and record the video id on the project. Returns the video id;
+    raises RuntimeError when the upload fails. Calendars and studios both
+    upload through here."""
     from app.services import youtube_upload
     from app.services.animation import brief, metadata, storyboard
 
@@ -315,7 +318,6 @@ def _upload(entry: dict, project: dict) -> str:
             direction=brief.title_direction(project),
         )
         store.update_project(pid, youtube=meta)
-    publish_at = shorts_schedule._compute_publish_at(entry)
     thumb = store.thumb_path(pid) if project.get("aspect") == "16:9" and os.path.isfile(store.thumb_path(pid)) else None
     result = youtube_upload.youtube_upload_service.upload_video(
         video_path=store.final_path(pid),
@@ -328,8 +330,17 @@ def _upload(entry: dict, project: dict) -> str:
     if not result.get("success"):
         raise RuntimeError(result.get("error", "unknown upload error"))
     video_id = result["video_id"]
-    _patch(entry["id"], status=STATUS_SCHEDULED if publish_at else STATUS_UPLOADED, youtube_video_id=video_id, error="")
     store.update_project(pid, youtube_video_id=video_id, uploaded_at=time.time(), publish_at=publish_at or "")
+    return video_id
+
+
+def _upload(entry: dict, project: dict) -> str:
+    from app.services import schedule as shorts_schedule
+
+    publish_at = shorts_schedule._compute_publish_at(entry)
+    video_id = upload_project(project, publish_at)
+    meta = store.load_project(project["project_id"]).get("youtube") or {}
+    _patch(entry["id"], status=STATUS_SCHEDULED if publish_at else STATUS_UPLOADED, youtube_video_id=video_id, error="")
     try:
         from app.services import discord_notify
 

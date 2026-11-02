@@ -258,6 +258,14 @@ def validate_slot(studio: dict, slot: dict, defaults: dict | None = None) -> dic
         "youtube_video_id": slot.get("youtube_video_id", ""),
         "publish_at": slot.get("publish_at", ""),
         "error": slot.get("error", ""),
+        # production and upload bookkeeping (runner.py)
+        "attempts": int(slot.get("attempts") or 0),
+        "upload_attempts": int(slot.get("upload_attempts") or 0),
+        "qa": dict(slot.get("qa") or {}),
+        "ready_at": float(slot.get("ready_at") or 0),
+        "veto_waived": bool(slot.get("veto_waived")),
+        "uploaded_at": float(slot.get("uploaded_at") or 0),
+        "checkins": dict(slot.get("checkins") or {}),
         "created_at": slot.get("created_at") or now,
         "updated_at": now,
     }

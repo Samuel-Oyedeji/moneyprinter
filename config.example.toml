@@ -545,7 +545,8 @@ model = ""
 # Autonomous studios (docs/studios-pilot-plan.md): each studio's agent plans
 # its own videos and uploads them to the channel. Every studio is created
 # paused; unpause it on the Studios page once you've checked its rules.
-# Studio data lives in storage/studios/<studio id>/.
+# Studio data lives in storage/studios/<studio id>/. An hourly cron job runs
+# them (POST /api/v1/studios/tick; see docs/studios-pilot-plan.md §10).
 enabled = false
 # Global kill switch: true stops every studio from planning, making or
 # uploading anything (each studio also has its own pause).
