@@ -253,6 +253,7 @@ def validate_slot(studio: dict, slot: dict, defaults: dict | None = None) -> dic
         "experiment": str(slot.get("experiment", "") or ""),
         "arm": arm,
         "prediction": prediction,
+        "why": str(slot.get("why", "") or "").strip()[:500],  # the agent's reason for this video
         "project_id": slot.get("project_id", ""),
         "youtube_video_id": slot.get("youtube_video_id", ""),
         "publish_at": slot.get("publish_at", ""),

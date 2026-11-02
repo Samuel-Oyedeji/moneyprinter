@@ -232,15 +232,17 @@ def _week_start(day: date_cls) -> date_cls:
     return day - timedelta(days=day.weekday())
 
 
-def spend(queue: list[dict], costs: dict, today: date_cls) -> dict:
-    """Production cost of the slots dated this week and last week."""
+def spend(queue: list[dict], costs: dict, today: date_cls, extra: list[tuple[str, float]] = ()) -> dict:
+    """Cost of the slots dated this week and last week, plus ``extra``
+    (date, cost) items such as the planner's own runs."""
     this_week = _week_start(today)
     totals = {"this_week": 0.0, "last_week": 0.0}
-    for slot in queue:
-        cost = _number(costs.get(slot.get("project_id", "")))
-        if not cost or not slot.get("date"):
+    items = [(slot.get("date"), costs.get(slot.get("project_id", ""))) for slot in queue] + list(extra)
+    for day, cost in items:
+        cost = _number(cost)
+        if not cost or not day:
             continue
-        start = _week_start(date_cls.fromisoformat(slot["date"]))
+        start = _week_start(date_cls.fromisoformat(day))
         if start == this_week:
             totals["this_week"] += cost
         elif start == this_week - timedelta(days=7):
@@ -255,6 +257,7 @@ def build_packet(
     df: pd.DataFrame,
     costs: dict | None = None,
     today: date_cls | None = None,
+    extra_spend: list[tuple[str, float]] = (),
 ) -> dict:
     today = today or date_cls.today()
     costs = costs or {}
@@ -270,7 +273,7 @@ def build_packet(
     with_prediction = [v for v in videos if v["prediction_hit"] is not None]
     hits = sum(1 for v in with_prediction if v["prediction_hit"])
     budget = studio.get("weekly_budget_usd", 0)
-    spent = spend(queue, costs, today)
+    spent = spend(queue, costs, today, extra_spend)
     states: dict[str, int] = {}
     for v in videos:
         states[v["state"]] = states.get(v["state"], 0) + 1
@@ -305,16 +308,8 @@ def build_packet(
     }
 
 
-def load_packet(studio_id: str, today: date_cls | None = None) -> dict:
-    """The packet from what is on disk: the studio, its queue and
-    experiments, the analytics dataset and each video's production cost."""
-    from app.services.analytics import report
-    from app.services.studios import store
-
-    studio = store.load_studio(studio_id)
-    if not studio:
-        raise KeyError(f"studio not found: {studio_id}")
-    queue = store.load_queue(studio_id)
+def production_costs(studio: dict, queue: list[dict]) -> dict:
+    """{project_id: cost} for the queue's videos."""
     costs = {}
     if studio["pipeline"] == "animation":
         from app.services.animation import store as anim_store
@@ -323,4 +318,32 @@ def load_packet(studio_id: str, today: date_cls | None = None) -> dict:
             project = anim_store.load_project(slot["project_id"]) if slot.get("project_id") else None
             if project:
                 costs[slot["project_id"]] = anim_store.total_cost(project)
-    return build_packet(studio, queue, store.load_experiments(studio_id), report.build_dataset(), costs, today)
+    return costs
+
+
+def planner_spend(studio_id: str) -> list[tuple[str, float]]:
+    """(date, cost) of each planning run, from the timeline."""
+    from app.services.studios import store
+
+    items = []
+    for event in store.list_events(studio_id, types=("plan", "incident")):
+        cost = _number((event.get("data") or {}).get("planner_cost"))
+        if cost:
+            items.append((datetime.fromtimestamp(event["ts"], timezone.utc).date().isoformat(), cost))
+    return items
+
+
+def load_packet(studio_id: str, today: date_cls | None = None, df: pd.DataFrame | None = None) -> dict:
+    """The packet from what is on disk: the studio, its queue and
+    experiments, the analytics dataset and what everything cost."""
+    from app.services.analytics import report
+    from app.services.studios import store
+
+    studio = store.load_studio(studio_id)
+    if not studio:
+        raise KeyError(f"studio not found: {studio_id}")
+    queue = store.load_queue(studio_id)
+    df = report.build_dataset() if df is None else df
+    return build_packet(
+        studio, queue, store.load_experiments(studio_id), df, production_costs(studio, queue), today, planner_spend(studio_id)
+    )
