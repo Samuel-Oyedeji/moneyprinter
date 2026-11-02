@@ -9,9 +9,8 @@ its rules and unpaused it.
 import copy
 
 from app.services.animation import vocab
+from app.services.animation.brief import WRITERS_CHOICE
 from app.services.studios import model, store
-
-WRITERS_CHOICE = "writer's choice"
 
 ANIMATION = {
     "id": "animation",

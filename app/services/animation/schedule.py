@@ -301,13 +301,19 @@ def _ensure_video(entry: dict) -> dict:
 def _upload(entry: dict, project: dict) -> str:
     from app.services import schedule as shorts_schedule
     from app.services import youtube_upload
-    from app.services.animation import metadata, storyboard
+    from app.services.animation import brief, metadata, storyboard
 
     pid = project["project_id"]
     meta = project.get("youtube") or {}
     if not meta.get("title"):
         board = store.read_json(store.path(pid, "storyboard.json")) or {}
-        meta = metadata.generate(project["topic"], storyboard.narration_text(board), project["aspect"], board.get("title", ""))
+        meta = metadata.generate(
+            project["topic"],
+            storyboard.narration_text(board),
+            project["aspect"],
+            board.get("title", ""),
+            direction=brief.title_direction(project),
+        )
         store.update_project(pid, youtube=meta)
     publish_at = shorts_schedule._compute_publish_at(entry)
     thumb = store.thumb_path(pid) if project.get("aspect") == "16:9" and os.path.isfile(store.thumb_path(pid)) else None

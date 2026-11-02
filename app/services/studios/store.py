@@ -3,6 +3,7 @@
     studio.json     the owner's rules (model.validate_studio)
     playbook.json   the agent's defaults and beliefs (model.validate_playbook)
     queue.json      upload slots and reserve topics (model.validate_slot)
+    experiments.json  the agent's tests (model.validate_experiment)
     timeline.jsonl  one event per line, append-only
     notes.json      the owner's notes to the agent, with a read mark
 
@@ -248,6 +249,20 @@ def update_slot(studio_id: str, slot_id: str, **fields) -> dict:
         queue[index] = slot
         _write_json(_path(studio_id, "queue.json"), queue)
     return slot
+
+
+# -------------------------------------------------------------- experiments
+def load_experiments(studio_id: str) -> list[dict]:
+    return _read_json(_path(studio_id, "experiments.json"), [])
+
+
+def save_experiment(studio_id: str, experiment: dict) -> dict:
+    """Add an experiment, or replace the one with the same id."""
+    with locked(studio_id):
+        clean = model.validate_experiment(_require(studio_id), experiment)
+        experiments = [e for e in load_experiments(studio_id) if e.get("id") != clean["id"]]
+        _write_json(_path(studio_id, "experiments.json"), experiments + [clean])
+    return clean
 
 
 def daily_slot_count(day: str) -> int:

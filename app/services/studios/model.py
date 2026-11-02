@@ -3,6 +3,7 @@
     studio.json    the rules the owner sets; the agent reads, never writes
     playbook.json  what the agent believes works, each belief with evidence
     queue.json     the studio's upload slots and reserve topics
+    experiments.json  the tests the agent runs: one lever, two or more values
     timeline.jsonl what happened, one event per line (append-only)
     notes.json     the owner's notes to the agent
 
@@ -48,6 +49,9 @@ EVENT_TYPES = (
     "note",  # the owner's
     "settings",  # the owner changed the studio's rules
 )
+
+EXPERIMENT_STATUSES = ("running", "concluded", "abandoned")
+WEEK_RE = re.compile(r"\d{4}-W(0[1-9]|[1-4]\d|5[0-3])")
 
 BELIEF_STATUSES = ("testing", "adopted", "rejected")
 # A belief is adopted only with enough videos on every side, seen in more
@@ -255,6 +259,51 @@ def validate_slot(studio: dict, slot: dict, defaults: dict | None = None) -> dic
         "error": slot.get("error", ""),
         "created_at": slot.get("created_at") or now,
         "updated_at": now,
+    }
+
+
+# --------------------------------------------------------------- experiment
+def week_id(day: date_cls) -> str:
+    """ISO week, e.g. "2026-W46": the unit the agent plans in."""
+    year, week, _ = day.isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+def validate_experiment(studio: dict, experiment: dict) -> dict:
+    """One test: a lever and the values being compared (the arms)."""
+    problems = []
+    experiment = dict(experiment or {})
+    exp_id = str(experiment.get("id", "")).strip()
+    if not exp_id:
+        problems.append("experiment id is required")
+    week = str(experiment.get("week", ""))
+    if not WEEK_RE.fullmatch(week):
+        problems.append(f"experiment week {week!r} must look like 2026-W46")
+    lever = experiment.get("lever")
+    levers = studio.get("levers") or {}
+    values = list(experiment.get("values") or [])
+    if lever not in levers:
+        problems.append(f"experiment lever {lever!r} is not one of {', '.join(levers)}")
+    else:
+        bad = [v for v in values if v not in levers[lever]["values"]]
+        if bad:
+            problems.append(f"experiment values {bad} are not allowed for {lever}")
+    if len(set(map(str, values))) < 2:
+        problems.append("an experiment compares at least two different values")
+    status = experiment.get("status", "running")
+    if status not in EXPERIMENT_STATUSES:
+        problems.append(f"experiment status must be one of {', '.join(EXPERIMENT_STATUSES)}")
+    if problems:
+        raise StudioError(problems)
+    return {
+        "id": exp_id,
+        "week": week,
+        "lever": lever,
+        "values": values,
+        "hypothesis": str(experiment.get("hypothesis", "") or "").strip(),
+        "status": status,
+        "verdict": dict(experiment.get("verdict") or {}),
+        "created_at": experiment.get("created_at") or time.time(),
     }
 
 

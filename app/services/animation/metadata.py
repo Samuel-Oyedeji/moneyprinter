@@ -17,8 +17,9 @@ MAX_HASHTAGS = 5
 TAGS_TOTAL_MAX = 450
 
 
-def build_prompt(topic: str, narration: str, aspect: str, working_title: str = "") -> str:
+def build_prompt(topic: str, narration: str, aspect: str, working_title: str = "", direction: str = "") -> str:
     shorts = aspect == "9:16"
+    title_direction = f"\n   Style: {direction.strip()}" if direction and direction.strip() else ""
     return f"""
 # Role
 You are a YouTube SEO copywriter for an animated storytelling channel
@@ -28,7 +29,7 @@ You are a YouTube SEO copywriter for an animated storytelling channel
 1. "title": the strongest of several internal drafts. At most {60 if shorts else TITLE_MAX} characters.
    Put the main search keyword early. Hook with a curiosity gap built on a
    real detail from the video. Truthful — never promise what the video
-   doesn't show. No ALL-CAPS words, no emojis, no pipes, no hashtags.
+   doesn't show. No ALL-CAPS words, no emojis, no pipes, no hashtags.{title_direction}
 2. "description": detailed and search-friendly, 120–220 words.
    - Line 1: a hook (max 120 characters) that adds a new reason to watch
      and contains the main keyword. Do not repeat the title.
@@ -111,9 +112,9 @@ def sanitize(raw: dict, topic: str, aspect: str) -> dict:
     return {"title": title, "description": description, "hashtags": hashtags, "tags": tags}
 
 
-def generate(topic: str, narration: str, aspect: str, working_title: str = "", on_cost=None) -> dict:
+def generate(topic: str, narration: str, aspect: str, working_title: str = "", on_cost=None, direction: str = "") -> dict:
     try:
-        raw = llm.generate_json(build_prompt(topic, narration, aspect, working_title), on_cost=on_cost)
+        raw = llm.generate_json(build_prompt(topic, narration, aspect, working_title, direction), on_cost=on_cost)
     except Exception as exc:
         logger.warning(f"metadata generation failed, using a plain fallback: {exc}")
         raw = {"title": working_title or topic, "description": "", "hashtags": [], "tags": [topic]}
