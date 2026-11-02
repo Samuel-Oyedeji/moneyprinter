@@ -3,7 +3,8 @@
 A studio is created from its template once and then belongs to the owner:
 editing a template never changes a studio that already exists. Every studio
 starts paused, so nothing is planned or uploaded until the owner has read
-its rules and unpaused it.
+its rules and unpaused it, and in shadow mode, so nothing it uploads is
+published until the owner switches shadow off.
 """
 
 import copy
@@ -51,6 +52,7 @@ ANIMATION = {
     "veto_hours": 12,
     "planner_model": "",
     "paused": True,
+    "shadow": True,  # starts in shadow: nothing is published until you switch it off
 }
 
 TEMPLATES = {"animation": ANIMATION}

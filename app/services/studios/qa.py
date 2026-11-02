@@ -7,7 +7,9 @@ they all pass. Each failed check names the fix the runner should try once:
     voice    re-record the narration (sound faults, narration ≠ script)
     script   rewrite from the script on (length far off, a false claim, a rule broken)
     package  rewrite the YouTube title and description
-    reserve  drop this video and use a reserve topic (topic now repeats)
+    reserve  drop this video and use a reserve topic (its subject repeats an
+             earlier video: by word overlap, or by the critic for the same
+             subject in other words)
     stop     drop it and flag it (cost overrun)
 
 One ffmpeg pass measures the file: duration, streams, loudness, silences,
@@ -20,6 +22,7 @@ import subprocess
 
 from loguru import logger
 
+from app.services.studios import model
 from app.utils import utils
 
 DURATION_SLACK = 0.4  # ±40% of the brief's length
@@ -140,14 +143,41 @@ def cost_check(cost: float) -> dict:
     return _check("cost", cost <= MAX_VIDEO_COST, f"${cost:.2f} (cap ${MAX_VIDEO_COST:.2f})", "stop")
 
 
-def topic_check(topic: str, recent: list[dict], own_sources: tuple[str, ...]) -> dict:
+def earlier_topics(studio: dict, slot: dict, recent: list[dict]) -> list[dict]:
+    """What a video must not repeat: the channel's titles, hand-made videos,
+    and this studio's videos that come before it. Its own entries, dropped
+    videos and the studio's later videos don't count; a later video is
+    checked against this one when its turn comes, so of two videos on the
+    same subject only the second is dropped."""
+    from app.services.studios import runner, store
+
+    mine = runner.slot_utc(slot) if slot.get("date") and slot.get("time") else None
+    before, skip = [], {str(slot["brief"].get("topic", "")).strip().lower()}
+    for other in store.load_queue(studio["id"]):
+        topic = str(other["brief"].get("topic", "")).strip()
+        if other["id"] == slot["id"]:
+            continue
+        dropped = other["status"] in (model.SLOT_FAILED, model.SLOT_CANCELLED) or other["reserve"]
+        if dropped or mine is None or runner.slot_utc(other) >= mine:
+            skip.add(topic.lower())
+        else:
+            before.append({"text": topic, "source": f"{studio['id']} queue", "date": other["date"]})
+    own_queue = f"{studio['id']} queue"
+    kept = [r for r in recent if r["source"] != own_queue and r["text"].strip().lower() not in skip]
+    seen, unique = set(), []
+    for item in kept + before:
+        if item["text"].strip().lower() not in seen:
+            seen.add(item["text"].strip().lower())
+            unique.append(item)
+    return unique
+
+
+def topic_check(topic: str, earlier: list[dict]) -> dict:
     """The topic is still new: another studio or a hand-made video may have
-    covered it since the plan was made. The video's own project and queue
-    entry don't count."""
+    covered it since the plan was made."""
     from app.services.studios import topics
 
-    others = [r for r in recent if not (r["source"] in own_sources and r["text"].strip().lower() == topic.strip().lower())]
-    result = topics.check([topic], others)[0]
+    result = topics.check([topic], earlier)[0]
     detail = "new" if result["new"] else f"repeats {result['matches'][0]['text']!r} ({result['matches'][0]['source']})"
     return _check("topic still new", result["new"], detail, "reserve")
 
@@ -160,6 +190,9 @@ Studio rules (the video must not break any):
 {rules}
 
 Topic: {topic}
+
+Topics the channel has already covered, or publishes before this video:
+{covered}
 
 Narration script:
 {script}
@@ -174,18 +207,25 @@ Find:
 - "rule": anything that breaks a studio rule.
 - "title": a title or description that promises something the video does not deliver, or states
   something false.
+- "duplicate": this video's subject is the same as one of the topics above (the same question,
+  mechanism, creature, object or event), even in different words. Quote the topic it repeats.
+  Sharing a broad theme (two space videos, two animal videos) is fine.
 
 Respond ONLY with JSON:
-{{"problems": [{{"kind": "claim" | "rule" | "title", "quote": "<the exact words>", "why": "<one sentence>"}}]}}
+{{"problems": [{{"kind": "claim" | "rule" | "title" | "duplicate", "quote": "<the exact words>", "why": "<one sentence>"}}]}}
 An empty list means the video is fine."""
 
 
-def critic_check(studio: dict, topic: str, script_text: str, meta: dict, ask) -> tuple[dict, float]:
+MAX_COVERED = 120
+
+
+def critic_check(studio: dict, topic: str, script_text: str, meta: dict, ask, covered: list[str] = ()) -> tuple[dict, float]:
     """One model pass over the script and the YouTube copy. ``ask(prompt)``
     returns (reply text, cost). A broken reply fails safe: no upload."""
     prompt = CRITIC_PROMPT.format(
         rules="\n".join(f"- {r}" for r in studio["hard_rules"]),
         topic=topic,
+        covered="\n".join(f"- {t}" for t in list(covered)[:MAX_COVERED]) or "(none)",
         script=script_text,
         title=(meta or {}).get("title", ""),
         description=(meta or {}).get("description", ""),
@@ -201,7 +241,7 @@ def critic_check(studio: dict, topic: str, script_text: str, meta: dict, ask) ->
     if not problems:
         return _check("critic", True, "no problems found"), cost
     kinds = {str(p.get("kind")) for p in problems}
-    fix = "script" if kinds & {"claim", "rule"} else "package"
+    fix = "reserve" if "duplicate" in kinds else "script" if kinds & {"claim", "rule"} else "package"
     detail = "; ".join(f"{p.get('kind')}: \"{str(p.get('quote', ''))[:120]}\" ({p.get('why', '')})" for p in problems[:5])
     return _check("critic", False, detail, fix), cost
 
@@ -231,15 +271,16 @@ def run(studio: dict, slot: dict, project: dict, recent: list[dict], ask, probe_
     script_text = (anim_store.read_json(anim_store.path(pid, "script.json")) or {}).get("text", "")
     words = (anim_store.read_json(anim_store.path(pid, "words.json")) or {}).get("words", [])
     meta = project.get("youtube") or {}
+    earlier = earlier_topics(studio, slot, recent)
     checks += [
         narration_check(words, script_text),
         cost_check(anim_store.total_cost(project)),
-        topic_check(project["topic"], recent, ("animation project", f"{studio['id']} queue")),
+        topic_check(project["topic"], earlier),
         title_check(meta, project.get("aspect", "9:16")),
     ]
     cost = 0.0
     if all(c["ok"] for c in checks):
-        critic, cost = critic_check(studio, project["topic"], script_text, meta, ask)
+        critic, cost = critic_check(studio, project["topic"], script_text, meta, ask, [t["text"] for t in earlier])
         checks.append(critic)
     failed = [c for c in checks if not c["ok"]]
     fix = next((f for f in FIX_ORDER if any(c["fix"] == f for c in failed)), "")

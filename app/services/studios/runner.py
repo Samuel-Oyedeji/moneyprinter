@@ -232,9 +232,10 @@ def recover(studio: dict) -> list[str]:
             project = anim_store.load_project(slot["project_id"]) if slot.get("project_id") else None
             video_id = (project or {}).get("youtube_video_id")
             if video_id:  # it went up before the restart: never upload twice
+                publish_at = (project or {}).get("publish_at", "")
                 store.update_slot(
                     studio["id"], slot["id"], status=model.SLOT_UPLOADED, youtube_video_id=video_id,
-                    publish_at=(project or {}).get("publish_at", ""), uploaded_at=(project or {}).get("uploaded_at", 0),
+                    publish_at=publish_at, uploaded_at=(project or {}).get("uploaded_at", 0), shadow=not publish_at,
                 )
             else:
                 store.update_slot(studio["id"], slot["id"], status=model.SLOT_READY, error="interrupted while uploading")
@@ -396,12 +397,14 @@ def upload_slot(studio: dict, slot: dict, now: datetime) -> dict:
 
     sid = studio["id"]
     slot = store.update_slot(sid, slot["id"], status=model.SLOT_UPLOADING, upload_attempts=slot["upload_attempts"] + 1)
+    shadow = bool(studio.get("shadow"))
     publish = max(slot_utc(slot), now + PUBLISH_MIN_LEAD)
     project = anim_store.load_project(slot["project_id"])
     try:
         if not project:
             raise RuntimeError(f"project {slot['project_id']} is gone from disk")
-        video_id = anim_schedule.upload_project(project, _iso(publish))
+        # in shadow mode the video goes up private with no publish time: it never goes public
+        video_id = anim_schedule.upload_project(project, None if shadow else _iso(publish))
     except Exception as exc:
         error = f"upload failed: {exc}"[:500]
         final = slot["upload_attempts"] >= MAX_UPLOAD_ATTEMPTS
@@ -412,12 +415,17 @@ def upload_slot(studio: dict, slot: dict, now: datetime) -> dict:
         )
         return {"slot_id": slot["id"], "status": "failed" if final else "retry"}
     store.update_slot(
-        sid, slot["id"], status=model.SLOT_UPLOADED, youtube_video_id=video_id, publish_at=_iso(publish), uploaded_at=now.timestamp(), error=""
+        sid, slot["id"], status=model.SLOT_UPLOADED, youtube_video_id=video_id, publish_at="" if shadow else _iso(publish),
+        uploaded_at=now.timestamp(), shadow=shadow, error="",
     )
-    when = publish.astimezone(local_tz()).strftime("%a %d %b %H:%M")
+    title = _title(anim_store.load_project(slot["project_id"]), slot)
+    if shadow:
+        summary = f"Uploaded \"{title}\" privately (shadow mode: it stays private)."
+    else:
+        summary = f"Uploaded \"{title}\"; it goes public {publish.astimezone(local_tz()).strftime('%a %d %b %H:%M')}."
     store.append_event(
-        sid, "uploaded", f"Uploaded \"{_title(anim_store.load_project(slot['project_id']), slot)}\"; it goes public {when}.",
-        {"slot_id": slot["id"], "video_id": video_id, "url": f"https://youtu.be/{video_id}", "publish_at": _iso(publish)},
+        sid, "uploaded", summary,
+        {"slot_id": slot["id"], "video_id": video_id, "url": f"https://youtu.be/{video_id}", "publish_at": "" if shadow else _iso(publish), "shadow": shadow},
     )
     return {"slot_id": slot["id"], "status": "uploaded", "video_id": video_id}
 

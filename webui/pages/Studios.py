@@ -23,7 +23,7 @@ sys.path.insert(0, root_dir)
 from app.config import config  # noqa: E402
 from app.services import discord_notify, youtube_upload  # noqa: E402
 from app.services.animation import store as anim_store  # noqa: E402
-from app.services.studios import evaluate, model, notify, planner, runner, store, templates  # noqa: E402
+from app.services.studios import evaluate, model, notify, planner, runner, store, templates, trial  # noqa: E402
 
 st.set_page_config(page_title="Studios", page_icon="🎛", layout="wide")
 st.markdown(
@@ -155,6 +155,8 @@ def render_cards(studios: list[dict]) -> None:
         latest = store.list_events(studio["id"], limit=1)
         with column, st.container(border=True):
             badge = ":orange-badge[Paused]" if studio["paused"] else ":green-badge[Active]"
+            if studio.get("shadow"):
+                badge += " :violet-badge[Shadow]"
             st.markdown(f"#### {studio['name']} {badge}")
             st.caption(f"{studio['pipeline'].title()} · {studio['cadence']['per_day']} a day · {studio['post_window']['start']}–{studio['post_window']['end']}")
             st.caption("This week")
@@ -244,6 +246,22 @@ def render_queue(studio: dict) -> None:
             st.markdown(f"##### {datetime.fromisoformat(slot['date']).strftime('%A %d %B')}")
         _slot_card(studio, slot)
 
+    to_rate = sorted(
+        (s for s in queue if s["status"] == model.SLOT_UPLOADED and not s["owner_review"] and time.time() - s["uploaded_at"] < 14 * 86400),
+        key=runner.slot_utc,
+    )
+    if to_rate:
+        st.markdown("##### Rate finished videos")
+        st.caption("Your 👍 / 👎 is how the trial measures whether QA lets through anything you'd have stopped. A 👎 also goes to the studio as a note.")
+        for slot in to_rate:
+            with st.container(border=True):
+                left, right = st.columns([3, 1.2])
+                shadow = " :violet-badge[Shadow · private]" if slot["shadow"] else ""
+                left.markdown(f"**{slot['date']} {slot['time']}** · {slot['brief']['topic']}{shadow}")
+                left.caption(f"[Watch on YouTube](https://youtu.be/{slot['youtube_video_id']})")
+                with right:
+                    _review_controls(studio, slot)
+
     reserves = [s for s in queue if s["reserve"] and s["status"] == model.SLOT_PLANNED]
     with st.expander(f"Reserve topics ({len(reserves)})", expanded=False):
         st.caption("Used when a video fails its checks: the reserve takes the failed video's slot.")
@@ -313,6 +331,25 @@ def _slot_card(studio: dict, slot: dict) -> None:
                     store.update_slot(studio["id"], slot["id"], status=model.SLOT_CANCELLED, error="cancelled by the owner")
                     store.append_event(studio["id"], "vetoed", f"You cancelled \"{brief['topic']}\" ({slot['date']} {slot['time']}).", {"slot_id": slot["id"]})
                     st.rerun()
+            if slot["status"] == model.SLOT_READY:
+                _review_controls(studio, slot)
+
+
+def _review_controls(studio: dict, slot: dict) -> None:
+    review = slot.get("owner_review") or {}
+    if review:
+        mark = "👍" if review.get("verdict") == "good" else "👎"
+        st.caption(f"You rated it {mark} {review.get('note', '')}")
+        return
+    good, bad = st.columns(2)
+    if good.button("👍", key=f"good_{slot['id']}", use_container_width=True, help="You'd publish this."):
+        store.review_slot(studio["id"], slot["id"], "good")
+        st.rerun()
+    with bad.popover("👎"):
+        note = st.text_input("What's wrong with it?", key=f"bad_note_{slot['id']}")
+        if st.button("Save 👎", key=f"bad_{slot['id']}", disabled=not note.strip()):
+            store.review_slot(studio["id"], slot["id"], "bad", note)
+            st.rerun()
 
 
 # ================================================================== results
@@ -326,10 +363,11 @@ def render_results(studio: dict) -> None:
     except Exception as exc:
         st.error(f"Couldn't read the results: {exc}")
         return
+    _render_trial_report(studio)
     baseline = packet["baseline"]
     m1, m2, m3, m4 = st.columns(4)
     if packet["calibrating"]:
-        m1.metric("Baseline · calibrating", f"{baseline['videos']}/{baseline['needed']}", help="Videos with 3-day views so far, of the number needed before videos are scored.")
+        m1.metric("Calibrating", f"{baseline['videos']}/{baseline['needed']}", help="No baseline yet: public videos with 3-day views so far, of the number needed before videos are scored.")
     else:
         m1.metric("Baseline (3-day views)", f"{baseline['views_3d']:,.0f}", help=baseline["explained"])
     hits = packet["predictions"]
@@ -379,6 +417,41 @@ def render_results(studio: dict) -> None:
         )
     else:
         st.caption("No uploads yet.")
+
+
+STATUS_MARKS = {"pass": "✅ pass", "fail": "❌ fail", "not yet": "⏳ not yet", "info": "ℹ️ info"}
+
+
+def _render_trial_report(studio: dict) -> None:
+    try:
+        result = trial.report(studio["id"])
+    except Exception as exc:
+        st.error(f"Couldn't build the trial report: {exc}")
+        return
+    shadow = result["shadow"]
+    title = f"Trial report · live since {result['start']}" if result["live"] else "Trial report · shadow days (nothing published yet)"
+    with st.expander(title, expanded=True):
+        st.caption("The go/no-go and pass criteria from docs/studios-trial-run.md, counted from the queue and the timeline.")
+        st.markdown(
+            f"**Shadow:** {shadow['uploaded_unattended']} of {shadow['slots_due']} due videos made and uploaded with no help · "
+            f"{shadow['failed']} failed · rated 👍 {shadow['rated_good']} / 👎 {shadow['rated_bad']} / unrated {shadow['unrated']} · "
+            f"cost per video {('$' + format(shadow['cost_per_video'], '.2f')) if shadow['cost_per_video'] is not None else '—'}"
+        )
+        if result["areas"]:
+            st.dataframe(
+                pd.DataFrame([{"Area": a["area"], "Result": STATUS_MARKS.get(a["status"], a["status"]), "Value": a["value"], "Detail": a["detail"]} for a in result["areas"]]),
+                hide_index=True, use_container_width=True,
+            )
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {"Week": w["week"], "Published": w["videos"], "Spend": w["spend"], "Budget": w["budget"], "Median 3-day views": w["median_views_3d"]}
+                        for w in result["weeks"]
+                    ]
+                ),
+                hide_index=True, use_container_width=True,
+                column_config={"Spend": st.column_config.NumberColumn(format="$%.2f"), "Budget": st.column_config.NumberColumn(format="$%.0f")},
+            )
 
 
 # ================================================================= playbook
@@ -497,6 +570,13 @@ with actions:
     paused = st.toggle("Paused", value=studio["paused"], key=f"paused_{studio['id']}", help="A paused studio plans, makes and uploads nothing.")
     if paused != studio["paused"]:
         store.set_paused(studio["id"], paused)
+        st.rerun()
+    shadow = st.toggle(
+        "Shadow", value=bool(studio.get("shadow")), key=f"shadow_{studio['id']}",
+        help="Shadow: everything runs, but uploads stay private and never publish, and they don't count as results. Switch off to go live.",
+    )
+    if shadow != bool(studio.get("shadow")):
+        store.update_studio(studio["id"], shadow=shadow)
         st.rerun()
     if st.button("🗓 Plan now", use_container_width=True, help="Plan from tomorrow to the end of that week (only days with free slots)."):
         _in_background(planner.run, studio["id"], label="studio-plan-manual")

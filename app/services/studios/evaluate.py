@@ -10,10 +10,12 @@ Scoring
     Shorts views are heavy-tailed: one viral video must not swamp the rest.
 
 Baseline
-    The median 3-day views of the 20 videos of the same pipeline (made by
-    the studio or by hand) published before this one. With fewer than 5 such
-    videos there is no baseline yet: the studio is calibrating and its
-    videos are reported unscored.
+    The median 3-day views of the 20 public videos of the same pipeline
+    (made by the studio or by hand) published before this one. With fewer
+    than 5 such videos there is no baseline yet: the studio is calibrating
+    and its videos are reported unscored. Private videos (old ones taken
+    down, shadow-mode uploads) never count, and shadow uploads are not
+    scored at all.
 
 Experiments
     An experiment compares values of one lever. An arm needs 3 scored
@@ -78,6 +80,8 @@ def baseline_pool(df: pd.DataFrame, pipeline: str) -> list[tuple[datetime, float
     if df.empty or "views_3d" not in df.columns:
         return []
     rows = df[(df["studio"] == pipeline) & df["views_3d"].notna() & df["published_at"].notna()]
+    if "live" in rows.columns:
+        rows = rows[rows["live"].fillna(False).astype(bool)]  # public or unlisted only
     return sorted((row.published_at, float(row.views_3d)) for row in rows.itertuples())
 
 
@@ -97,7 +101,7 @@ def score_videos(queue: list[dict], df: pd.DataFrame, pipeline: str, costs: dict
     costs = costs or {}
     videos = []
     for slot in queue:
-        if slot.get("status") != model.SLOT_UPLOADED or not slot.get("youtube_video_id"):
+        if slot.get("status") != model.SLOT_UPLOADED or not slot.get("youtube_video_id") or slot.get("shadow"):
             continue
         row = by_id.get(slot["youtube_video_id"])
         video = {

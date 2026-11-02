@@ -109,7 +109,10 @@ def alert_lines(studio: dict, events: list[dict]) -> list[str]:
             slot = store.get_slot(studio["id"], data.get("slot_id", "")) or {}
             if slot.get("status") == model.SLOT_READY:
                 deadline = runner.upload_after(studio, slot)
-                lines.append(f"🎬 {event['summary'].split('. It uploads')[0]}. Cancel before {_when(deadline)} to stop it.")
+                if studio.get("shadow"):
+                    lines.append(f"🎬 {event['summary'].split('. It uploads')[0]}. Shadow mode: it goes up private at {_when(deadline)}. Rate it on the Queue.")
+                else:
+                    lines.append(f"🎬 {event['summary'].split('. It uploads')[0]}. Cancel before {_when(deadline)} to stop it.")
     return lines
 
 
@@ -136,7 +139,7 @@ def digest_lines(studio: dict, now: datetime) -> list[str]:
     today = _local(now).date()
     yesterday_start = now - timedelta(days=1)
     queue = store.load_queue(studio["id"])
-    lines = [f"**{studio['name']}**" + (" (paused)" if studio.get("paused") else "")]
+    lines = [f"**{studio['name']}**" + (" (paused)" if studio.get("paused") else "") + (" (shadow: nothing is published)" if studio.get("shadow") else "")]
 
     def publish_time(slot):
         try:

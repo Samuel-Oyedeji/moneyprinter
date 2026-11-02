@@ -166,7 +166,7 @@ class RunnerTestCase(unittest.TestCase):
         self.uploaded = self.upload.start()
         self.addCleanup(self.upload.stop)
         templates.ensure_studio("animation")
-        store.update_studio("animation", paused=False, veto_hours=2)
+        store.update_studio("animation", paused=False, shadow=False, veto_hours=2)
 
     def book(self, hhmm="18:15", day=DAY, topic="Why do cats purr", reserves=1):
         slots = [{"date": day, "time": hhmm, "brief": {"topic": topic}, "prediction": "above"}]

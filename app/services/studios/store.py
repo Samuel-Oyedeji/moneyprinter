@@ -265,6 +265,30 @@ def save_experiment(studio_id: str, experiment: dict) -> dict:
     return clean
 
 
+REVIEW_VERDICTS = ("good", "bad")
+
+
+def review_slot(studio_id: str, slot_id: str, verdict: str, note: str = "") -> dict:
+    """The owner's verdict on a finished video. A 👎 (and a 👍 with a
+    comment) also becomes a note the agent reads at its next plan."""
+    if verdict not in REVIEW_VERDICTS:
+        raise model.StudioError(f"verdict must be one of {', '.join(REVIEW_VERDICTS)}")
+    note = str(note or "").strip()
+    if verdict == "bad" and not note:
+        raise model.StudioError("say in a line what's wrong with it, so the studio can learn from it")
+    with locked(studio_id):
+        slot = get_slot(studio_id, slot_id)
+        if not slot:
+            raise KeyError(f"slot not found: {slot_id}")
+        if slot["status"] not in (model.SLOT_READY, model.SLOT_UPLOADING, model.SLOT_UPLOADED):
+            raise model.StudioError("only a finished video can be rated")
+        slot = update_slot(studio_id, slot_id, owner_review={"verdict": verdict, "note": note, "at": time.time()})
+        if verdict == "bad" or note:
+            mark = "👎" if verdict == "bad" else "👍"
+            add_note(studio_id, f"{mark} \"{slot['brief']['topic']}\" ({slot['date']} {slot['time']}): {note or 'good'}")
+    return slot
+
+
 def active_project_ids() -> set[str]:
     """Projects a studio still needs on disk (not uploaded, not dropped):
     the storage sweeper must leave them alone."""

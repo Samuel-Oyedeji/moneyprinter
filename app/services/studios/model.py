@@ -147,6 +147,8 @@ def validate_studio(data: dict) -> dict:
         "veto_hours": float(data["veto_hours"]),
         "planner_model": str(data.get("planner_model", "") or "").strip(),
         "paused": bool(data.get("paused", True)),
+        # shadow: the whole loop runs, but uploads stay private and unscored
+        "shadow": bool(data.get("shadow", False)),
         "created_at": data.get("created_at") or now,
         "updated_at": now,
     }
@@ -265,7 +267,9 @@ def validate_slot(studio: dict, slot: dict, defaults: dict | None = None) -> dic
         "ready_at": float(slot.get("ready_at") or 0),
         "veto_waived": bool(slot.get("veto_waived")),
         "uploaded_at": float(slot.get("uploaded_at") or 0),
+        "shadow": bool(slot.get("shadow")),  # uploaded private by a studio in shadow mode
         "checkins": dict(slot.get("checkins") or {}),
+        "owner_review": dict(slot.get("owner_review") or {}),  # {"verdict": good|bad, "note", "at"}
         "created_at": slot.get("created_at") or now,
         "updated_at": now,
     }

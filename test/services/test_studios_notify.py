@@ -58,6 +58,7 @@ class TestAlerts(NotifyTestCase):
         self.assertEqual(self.sent, [])
 
     def test_problems_and_ready_videos_are_sent_and_retries_are_not(self):
+        self.studio = store.update_studio("animation", shadow=False)
         notify.flush(self.studio, self.now)
         slot = self.ready_slot()
         store.append_event("animation", "qa_failed", "Silence: fixing (voice)", {"retry": True})
@@ -71,6 +72,14 @@ class TestAlerts(NotifyTestCase):
         self.assertNotIn("fixing", embed["description"])
         self.assertIn("(https://mpt.example.com/Studios)", embed["description"])
         self.assertEqual(notify.flush(self.studio, self.now), 0)  # nothing twice
+
+    def test_in_shadow_mode_the_ping_says_it_stays_private(self):
+        notify.flush(self.studio, self.now)
+        slot = self.ready_slot()
+        store.append_event("animation", "produced", "Ready: \"Cats\". It uploads once…", {"slot_id": slot["id"]})
+        notify.flush(self.studio, self.now)
+        self.assertIn("Shadow mode: it goes up private", self.sent[0][1]["description"])
+        self.assertIn("(shadow: nothing is published)", notify.digest_lines(self.studio, self.now)[0])
 
     def test_ready_pings_can_be_turned_off(self):
         notify.flush(self.studio, self.now)
