@@ -16,16 +16,27 @@ so running it often is cheap and running it twice is harmless (one lock):
     check-in  3 and 7 days after publishing, record the video's numbers
 
 Nothing happens while [studios] enabled is false, [studios] paused is true,
-or the studio itself is paused. Every failure is a timeline incident.
+or the studio itself is paused. Every failure is a timeline incident, and
+notify.py sends Discord alerts at the end of each tick plus a daily digest.
+
+Only one tick runs at a time across processes too (a file lock): the web
+UI's "Run a tick now" and the cron hook never produce the same slot twice.
 """
 
+import os
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 
 from app.config import config
-from app.services.studios import evaluate, model, planner, qa, store, topics
+from app.services.studios import evaluate, model, notify, planner, qa, store, topics
+
+try:
+    import fcntl
+except ImportError:  # Windows: one process at a time is up to the owner
+    fcntl = None
 
 UPLOAD_LEAD = timedelta(minutes=90)
 PUBLISH_MIN_LEAD = timedelta(minutes=15)
@@ -83,6 +94,43 @@ def _incident_once_a_day(studio_id: str, key: str, summary: str, now: datetime, 
     store.append_event(studio_id, "incident", summary, {"key": key, "day": today, **(data or {})})
 
 
+def upload_after(studio: dict, slot: dict) -> datetime:
+    """When a ready video may upload: 90 minutes before its slot, and not
+    before the cancel window is over (unless the owner approved it)."""
+    lead = slot_utc(slot) - UPLOAD_LEAD
+    if slot.get("veto_waived") or not slot.get("ready_at"):
+        return lead
+    return max(lead, datetime.fromtimestamp(slot["ready_at"] + studio["veto_hours"] * 3600, timezone.utc))
+
+
+@contextmanager
+def _tick_guard():
+    """Yield True when this caller holds the tick (thread and file lock)."""
+    if not _tick_lock.acquire(blocking=False):
+        yield False
+        return
+    handle = None
+    try:
+        if fcntl is not None:
+            handle = open(os.path.join(store.studios_dir(), ".tick.lock"), "a")
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                yield False
+                return
+        yield True
+    finally:
+        if handle is not None:
+            handle.close()
+        _tick_lock.release()
+
+
+def is_running() -> bool:
+    """Whether a tick is running in any process."""
+    with _tick_guard() as free:
+        return not free
+
+
 def _title(project: dict | None, slot: dict) -> str:
     return ((project or {}).get("youtube") or {}).get("title") or slot["brief"].get("topic", "")
 
@@ -96,9 +144,9 @@ def tick(now: datetime | None = None, client=None, probe_fn=None, reload: bool =
         return {"ran": False, "reason": "studios are disabled ([studios] enabled = false)"}
     if config.studios.get("paused", False):
         return {"ran": False, "reason": "every studio is paused ([studios] paused = true)"}
-    if not _tick_lock.acquire(blocking=False):
-        return {"ran": False, "reason": "a tick is already running"}
-    try:
+    with _tick_guard() as mine:
+        if not mine:
+            return {"ran": False, "reason": "a tick is already running"}
         clock = None if now else (lambda: datetime.now(timezone.utc))
         now = now or clock()
         _sync_analytics(now)
@@ -113,9 +161,18 @@ def tick(now: datetime | None = None, client=None, probe_fn=None, reload: bool =
                 logger.exception(f"studio {studio['id']}: tick failed")
                 store.append_event(studio["id"], "incident", f"The tick failed: {type(exc).__name__}: {exc}", {"stage": "tick"})
                 results[studio["id"]] = {"error": f"{type(exc).__name__}: {exc}"}
+            _quietly(notify.flush, studio, now)
+        _quietly(notify.send_digest, now)
+        _quietly(notify.record_tick, now)
         return {"ran": True, "at": _iso(now), "studios": results}
-    finally:
-        _tick_lock.release()
+
+
+def _quietly(action, *args) -> None:
+    """Notifications are best-effort: they never fail a tick."""
+    try:
+        action(*args)
+    except Exception:
+        logger.exception(f"studios: {getattr(action, '__name__', action)} failed")
 
 
 def _sync_analytics(now: datetime) -> None:
@@ -324,12 +381,7 @@ def _replace(studio: dict, slot: dict, now: datetime, reason: str) -> dict:
 def upload_due(studio: dict, now: datetime) -> list[dict]:
     from app.services import youtube_upload
 
-    due = [
-        s for s in store.load_queue(studio["id"])
-        if s["status"] == model.SLOT_READY
-        and now >= slot_utc(s) - UPLOAD_LEAD
-        and (s["veto_waived"] or now.timestamp() - s["ready_at"] >= studio["veto_hours"] * 3600)
-    ]
+    due = [s for s in store.load_queue(studio["id"]) if s["status"] == model.SLOT_READY and now >= upload_after(studio, s)]
     if not due:
         return []
     if not youtube_upload.youtube_upload_service.is_configured():

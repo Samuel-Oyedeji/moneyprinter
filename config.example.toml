@@ -554,6 +554,13 @@ paused = false
 # Default model for the planning agent (an OpenRouter model ID); a studio's
 # own planner_model wins. Empty = the Animation studio's writer model.
 planner_model = ""
+# The web address you open the app at (e.g. "https://mpt.example.com"), so
+# Discord alerts can link to the Studios page. Empty = no link.
+app_url = ""
+# Discord ([discord] webhook_url): a ping when each video is ready, with the
+# time it uploads unless you cancel it. Problems and the 07:00 daily digest
+# are always sent.
+notify_ready = true
 
 [discord]
 # Discord webhook for "video ready to publish" alerts.

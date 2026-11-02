@@ -251,6 +251,15 @@ def _run_all_calendars(run_date=None) -> None:
     except Exception:
         logger.exception("analytics sync before uploads failed; running uploads anyway")
 
+    # The studios run on their own hourly hook; this daily one reports when
+    # that hook has gone quiet.
+    try:
+        from app.services.studios import notify as studio_notify
+
+        studio_notify.check_heartbeat()
+    except Exception:
+        logger.exception("studio heartbeat check failed")
+
     # Storage clean-up after the sync (so hand-posted videos count as
     # posted) and before the calendars start new renders.
     from app.services import sweeper

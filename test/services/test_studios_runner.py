@@ -16,6 +16,7 @@ ROOT_DIR = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
 from app.config import config  # noqa: E402
+from app.services import discord_notify  # noqa: E402
 from app.services import schedule as shorts_schedule  # noqa: E402
 from app.services import youtube_upload  # noqa: E402
 from app.services.analytics import report  # noqa: E402
@@ -155,6 +156,8 @@ class RunnerTestCase(unittest.TestCase):
             patch.object(pipeline, "run_project", side_effect=fake_run_project),
             patch.object(runner, "_sync_analytics"),
             patch.object(youtube_upload.youtube_upload_service, "is_configured", return_value=True),
+            # never reach the real webhook in config.toml
+            patch.object(discord_notify.DiscordNotifyService, "send", return_value=True),
         ]
         for p in patchers:
             p.start()
