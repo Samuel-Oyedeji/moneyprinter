@@ -169,7 +169,11 @@ def _voice_label(voice: str) -> str:
 
 
 # ----------------------------------------------------------------- animations
+_MADE_FROM = {"schedule": "Calendar (auto)", "studio": "Autonomous studio"}
+
+
 def animation_items() -> list[dict]:
+    from app.services.animation import brief
     from app.services.animation import schedule as anim_schedule
     from app.services.animation import store
 
@@ -192,9 +196,10 @@ def animation_items() -> list[dict]:
             "Aspect": "Vertical 9:16" if project.get("aspect") == "9:16" else "Landscape 16:9",
             "Planned length": f"{project.get('seconds', 0)} s",
             "Voice": _voice_label(words.get("voice") or project.get("voice", "")),
-            "Made from": "Calendar (auto)" if project.get("source") == "schedule" else "Studio",
+            "Made from": _MADE_FROM.get(project.get("source"), "Studio"),
             "Research given": "Yes" if (project.get("context") or "").strip() else "No",
             **animation_style(board),
+            **brief.features(project),
         }
         items.append(
             _item(

@@ -10,6 +10,9 @@
 Each stage is skipped when its output already exists, so a retry after a
 failure picks up where the run stopped (a render failure does not pay for
 the script, the storyboard or the voice-over again).
+
+A video a studio made carries a brief (brief.py): its levers become
+directions in the script, storyboard and YouTube-copy prompts.
 """
 
 import os
@@ -17,7 +20,7 @@ import os
 from loguru import logger
 
 from app.config import config
-from app.services.animation import compose, llm, metadata, render, script, store, storyboard, tts
+from app.services.animation import brief, compose, llm, metadata, render, script, store, storyboard, tts
 
 STAGES = ("script", "storyboard", "voice", "render", "package")
 
@@ -76,7 +79,7 @@ def run_project(project_id: str, on_stage=None, render_scale: float | None = Non
         written = store.read_json(store.path(project_id, "script.json"))
         if not written and not board:
             stage(store.STATUS_SCRIPTING, "Writing the script…", 0.03)
-            written = script.write_script(project["topic"], project.get("context", ""), project["seconds"], on_cost=cost("llm"))
+            written = script.write_script(project["topic"], brief.script_notes(project), project["seconds"], on_cost=cost("llm"))
             store.write_json(store.path(project_id, "script.json"), written)
             used("script")
 
@@ -84,7 +87,7 @@ def run_project(project_id: str, on_stage=None, render_scale: float | None = Non
         if not board:
             stage(store.STATUS_WRITING, "Directing the scenes…", 0.08)
             board = storyboard.write_storyboard(
-                project["topic"], project.get("context", ""), written["text"], project["aspect"], on_cost=cost("llm")
+                project["topic"], brief.storyboard_context(project), written["text"], project["aspect"], on_cost=cost("llm")
             )
             if written.get("title"):
                 board["title"] = written["title"]  # the scriptwriter's title is the working title
@@ -129,7 +132,12 @@ def run_project(project_id: str, on_stage=None, render_scale: float | None = Non
         if not (project.get("youtube") or {}).get("generated"):
             stage(store.STATUS_PACKAGING, "Writing the YouTube title & description…", 0.95)
             meta = metadata.generate(
-                project["topic"], storyboard.narration_text(board), project["aspect"], board.get("title", ""), on_cost=cost("llm")
+                project["topic"],
+                storyboard.narration_text(board),
+                project["aspect"],
+                board.get("title", ""),
+                on_cost=cost("llm"),
+                direction=brief.title_direction(project),
             )
             store.update_project(project_id, youtube=meta)
 

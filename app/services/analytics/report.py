@@ -26,7 +26,7 @@ BASE_COLUMNS = (
     "batch_id", "batch_inferred", "batch_size", "generation", "posted_via", "match",
     "created_at", "published_at", "weekday", "publish_hour", "privacy", "live", "duration_seconds",
     "length", "age_days", "views", "likes", "comments", "shares", "watch_minutes",
-    "avg_view_seconds", "avg_view_pct", "subs_gained", "views_per_day", "views_7d", "engagement_per_1k",
+    "avg_view_seconds", "avg_view_pct", "subs_gained", "views_per_day", "views_3d", "views_7d", "engagement_per_1k",
     "on_disk",
 )
 
@@ -146,6 +146,7 @@ def build_dataset(
             "avg_view_pct": float(m["averageViewPercentage"]) if m.get("averageViewPercentage") is not None else float("nan"),
             "subs_gained": int(m.get("subscribersGained") or 0),
             "views_per_day": round(views / max(age_days, 1.0), 2),
+            "views_3d": views_after(snapshots.get(video_id) or [], local.date() if local else None, 3),
             "views_7d": views_after(snapshots.get(video_id) or [], local.date() if local else None, 7),
             "engagement_per_1k": round((likes + comments + shares) / views * 1000, 2) if views else 0.0,
             "on_disk": bool(item.get("on_disk", True)) if item else False,

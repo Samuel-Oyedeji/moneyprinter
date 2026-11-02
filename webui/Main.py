@@ -1562,6 +1562,11 @@ def _render_top_bar():
                 label="Analytics",
                 icon=":material/monitoring:",
             )
+            st.page_link(
+                "pages/Studios.py",
+                label="Studios",
+                icon=":material/smart_toy:",
+            )
 
             _render_task_manager_entry()
 

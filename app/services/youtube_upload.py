@@ -12,9 +12,9 @@ The same token carries the read-only scopes the Analytics page uses; a
 token authorized before those existed keeps uploading and only needs
 ``youtube_auth.py`` again to turn analytics on.
 
-Quota note: each ``videos.insert`` call costs 1600 units of the default
-10,000/day project quota, i.e. roughly 6 uploads per day unless Google
-grants a quota increase.
+Quota note: since June 2026 ``videos.insert`` has its own allowance of 100
+calls a day per project, separate from the 10,000 units other calls share.
+app.services.upload_budget keeps the app's own bookings under that.
 """
 import os
 from typing import Optional

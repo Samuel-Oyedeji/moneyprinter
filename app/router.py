@@ -10,7 +10,7 @@ Resources:
 from fastapi import APIRouter
 
 from app.controllers import ping
-from app.controllers.v1 import analytics, llm, schedule, sweeper, video
+from app.controllers.v1 import analytics, llm, schedule, studios, sweeper, video
 
 root_api_router = APIRouter()
 root_api_router.include_router(ping.router)
@@ -21,3 +21,4 @@ root_api_router.include_router(llm.router)
 root_api_router.include_router(schedule.router)
 root_api_router.include_router(analytics.router)
 root_api_router.include_router(sweeper.router)
+root_api_router.include_router(studios.router)

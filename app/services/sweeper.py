@@ -19,7 +19,7 @@ What goes per studio:
                  fact sheet, script and sources stay
 
 Never touched: anything booked, running or waiting for a retry on a calendar
-(its upload reads the file), documentaries and animations that aren't
+or in a studio's queue (its upload reads the file), documentaries and animations that aren't
 finished, anything modified in the last day, and storage/analytics.
 Every video is recorded in analytics/items.csv before its files go, so the
 Analytics page keeps all of it.
@@ -191,7 +191,10 @@ def _animation_candidates(posted: dict, today: date_cls, opts: dict, now: float)
     from app.services.animation import schedule as anim_schedule
     from app.services.animation import store
 
+    from app.services.studios import store as studio_store
+
     busy = {e["project_id"] for e in anim_schedule.list_entries() if e.get("project_id") and e.get("status") in (*anim_schedule.ACTIVE_STATUSES, anim_schedule.STATUS_FAILED)}
+    busy |= studio_store.active_project_ids()  # made by a studio, not uploaded yet
     candidates = []
     for project in store.list_projects():
         pid = project["project_id"]

@@ -9,8 +9,8 @@ storage/animation/_schedule.json and the existing cron hook
   auto    - a topic; on the due date the video is generated, then uploaded.
 
 Every booking goes through app.services.upload_budget, so animations never
-push a day past the 6 uploads that Shorts, documentaries and animations
-share. Videos the owner uploads by hand are marked "posted": they leave the
+push a day past the daily upload budget that every calendar and studio
+shares. Videos the owner uploads by hand are marked "posted": they leave the
 calendar and stop counting against the budget.
 """
 
@@ -214,6 +214,14 @@ def mark_posted(project_id: str, url: str = "", posted_on: str = "") -> dict:
 
 
 # ------------------------------------------------------------ batch planning
+def max_per_day() -> int:
+    """A batch's videos per day: the shared budget, and no more than the
+    Shorts calendar's evenly spaced slots (its spacing rule is reused)."""
+    from app.services import schedule as shorts_schedule
+
+    return min(upload_budget.daily_budget(), shorts_schedule.DAILY_VIDEO_LIMIT)
+
+
 def _slot_times(per_day: int) -> list[str]:
     from app.services import schedule as shorts_schedule
 
@@ -235,8 +243,8 @@ def plan_batch(items: list[dict], per_day: int = 1, start_date: str | None = Non
     """
     if not items:
         raise ValueError("nothing to schedule")
-    if not isinstance(per_day, int) or not 1 <= per_day <= upload_budget.DAILY_BUDGET:
-        raise ValueError(f"per_day must be between 1 and {upload_budget.DAILY_BUDGET}")
+    if not isinstance(per_day, int) or not 1 <= per_day <= max_per_day():
+        raise ValueError(f"per_day must be between 1 and {max_per_day()}")
     reference = now or _now()
     day = date_cls.fromisoformat(_validate_date(start_date)) if start_date else reference.date()
     slots = _slot_times(per_day)
@@ -290,18 +298,26 @@ def _ensure_video(entry: dict) -> dict:
     return project
 
 
-def _upload(entry: dict, project: dict) -> str:
-    from app.services import schedule as shorts_schedule
+def upload_project(project: dict, publish_at: str | None) -> str:
+    """Upload a finished animation (writing its YouTube copy first if it has
+    none) and record the video id on the project. Returns the video id;
+    raises RuntimeError when the upload fails. Calendars and studios both
+    upload through here."""
     from app.services import youtube_upload
-    from app.services.animation import metadata, storyboard
+    from app.services.animation import brief, metadata, storyboard
 
     pid = project["project_id"]
     meta = project.get("youtube") or {}
     if not meta.get("title"):
         board = store.read_json(store.path(pid, "storyboard.json")) or {}
-        meta = metadata.generate(project["topic"], storyboard.narration_text(board), project["aspect"], board.get("title", ""))
+        meta = metadata.generate(
+            project["topic"],
+            storyboard.narration_text(board),
+            project["aspect"],
+            board.get("title", ""),
+            direction=brief.title_direction(project),
+        )
         store.update_project(pid, youtube=meta)
-    publish_at = shorts_schedule._compute_publish_at(entry)
     thumb = store.thumb_path(pid) if project.get("aspect") == "16:9" and os.path.isfile(store.thumb_path(pid)) else None
     result = youtube_upload.youtube_upload_service.upload_video(
         video_path=store.final_path(pid),
@@ -314,8 +330,17 @@ def _upload(entry: dict, project: dict) -> str:
     if not result.get("success"):
         raise RuntimeError(result.get("error", "unknown upload error"))
     video_id = result["video_id"]
-    _patch(entry["id"], status=STATUS_SCHEDULED if publish_at else STATUS_UPLOADED, youtube_video_id=video_id, error="")
     store.update_project(pid, youtube_video_id=video_id, uploaded_at=time.time(), publish_at=publish_at or "")
+    return video_id
+
+
+def _upload(entry: dict, project: dict) -> str:
+    from app.services import schedule as shorts_schedule
+
+    publish_at = shorts_schedule._compute_publish_at(entry)
+    video_id = upload_project(project, publish_at)
+    meta = store.load_project(project["project_id"]).get("youtube") or {}
+    _patch(entry["id"], status=STATUS_SCHEDULED if publish_at else STATUS_UPLOADED, youtube_video_id=video_id, error="")
     try:
         from app.services import discord_notify
 

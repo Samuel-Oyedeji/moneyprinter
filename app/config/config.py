@@ -502,6 +502,7 @@ def save_config():
         config_to_save["discord"] = dict(discord)
         config_to_save["documentary"] = dict(documentary)
         config_to_save["animation"] = dict(animation)
+        config_to_save["studios"] = dict(studios)
         config_to_save["sweeper"] = dict(sweeper)
         config_to_save["assistant"] = dict(assistant)
         config_to_save["ui"] = dict(ui)
@@ -583,6 +584,7 @@ def reload_config() -> None:
             ("discord", discord),
             ("documentary", documentary),
             ("animation", animation),
+            ("studios", studios),
             ("sweeper", sweeper),
             ("assistant", assistant),
             ("ui", ui),
@@ -606,6 +608,7 @@ youtube = _SynchronizedConfig(_cfg.get("youtube", {}))
 discord = _SynchronizedConfig(_cfg.get("discord", {}))
 documentary = _SynchronizedConfig(_cfg.get("documentary", {}))
 animation = _SynchronizedConfig(_cfg.get("animation", {}))
+studios = _SynchronizedConfig(_cfg.get("studios", {}))
 sweeper = _SynchronizedConfig(_cfg.get("sweeper", {}))
 assistant = _SynchronizedConfig(_cfg.get("assistant", {}))
 ui = _SynchronizedConfig(
